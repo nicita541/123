@@ -16,6 +16,12 @@ from complex_agent.llm.provider import Provider
 DEFAULT_BASE_URL = "http://127.0.0.1:11434"
 DEFAULT_MODEL = "qwen2.5-coder:7b"
 DEFAULT_TIMEOUT_SECONDS = 60
+MODEL_PRIORITY = (
+    "qwen3-coder:30b",
+    "qwen2.5-coder:14b",
+    "qwen2.5-coder:7b-instruct",
+    "qwen3:8b",
+)
 
 
 class OllamaError(RuntimeError):
@@ -80,6 +86,15 @@ class OllamaProvider(Provider):
             return False
         return True
 
+    def select_available_model(self) -> list[str]:
+        models = self.list_models()
+        self.model = choose_ollama_model(self.model, models)
+        return models
+
+    def generation_check(self) -> bool:
+        response = self.complete("Return only OK").strip()
+        return bool(response)
+
     def list_models(self) -> list[str]:
         data = self._get_json("/api/tags")
         models = data.get("models", [])
@@ -140,6 +155,17 @@ def load_ollama_settings(config_path: str | Path | None = None) -> OllamaSetting
         provider=str(llm.get("provider", "ollama")) if isinstance(llm, dict) else "ollama",
         fallback_provider=str(llm.get("fallback_provider", "deterministic")) if isinstance(llm, dict) else "deterministic",
     )
+
+
+def choose_ollama_model(configured_model: str, available_models: list[str]) -> str:
+    if not available_models:
+        return configured_model or DEFAULT_MODEL
+    if configured_model in available_models:
+        return configured_model
+    for candidate in MODEL_PRIORITY:
+        if candidate in available_models:
+            return candidate
+    return available_models[0]
 
 
 def _read_models_config(config_path: str | Path | None) -> dict[str, Any]:

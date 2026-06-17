@@ -48,7 +48,9 @@ def create_router(store: SessionStore) -> APIRouter:
             "ollama_base_url": llm_status["ollama_base_url"],
             "ollama_model": llm_status["ollama_model"],
             "ollama_reachable": llm_status["ollama_reachable"],
+            "ollama_generation_check": llm_status.get("ollama_generation_check", False),
             "ollama_models": llm_status.get("ollama_models", []),
+            "fallback_provider": llm_status.get("fallback_provider", "deterministic"),
         }
 
     @router.get("/api/tools")
@@ -363,6 +365,28 @@ def _parse_git_status_line(line: str) -> tuple[str, str] | None:
 
 
 def _event_title(event_type: str) -> str:
+    titles = {
+        "task_status": "Состояние задачи",
+        "pending_approval": "Ожидается подтверждение",
+        "approval_granted": "Действие подтверждено",
+        "approval_rejected": "Действие отклонено",
+        "task_started": "Задача запущена",
+        "task_finished": "Задача завершена",
+        "step_started": "Шаг запущен",
+        "step_finished": "Шаг завершён",
+        "tool_called": "Инструмент вызван",
+        "tool_finished": "Инструмент завершён",
+        "llm_unavailable": "Ollama недоступен",
+        "patch_proposed": "Предложены изменения",
+        "patch_applied": "Patch применён",
+        "patch_failed": "Patch не применён",
+        "verification_finished": "Проверка завершена",
+        "proposal_failed": "Не удалось предложить изменения",
+    }
+    return titles.get(event_type, event_type)
+
+
+def _event_title(event_type: str) -> str:  # type: ignore[no-redef]
     titles = {
         "task_status": "Состояние задачи",
         "pending_approval": "Ожидается подтверждение",

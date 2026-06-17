@@ -1,0 +1,15 @@
+.git
+.agent
+.venv
+.pytest_cache
+__pycache__
+*.pyc
+*.pyo
+*.pyd
+dist
+build
+*.egg-info
+.env
+.env.*
+node_modules
+docs/final_desktop_ollama_validation_report.md

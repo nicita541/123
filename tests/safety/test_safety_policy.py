@@ -46,6 +46,12 @@ class SafetyPolicyTests(unittest.TestCase):
             decision = policy.check_command("git status --short")
             self.assertTrue(decision.allowed)
 
+    def test_allows_py_compile_verification_command(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            policy = SafetyPolicy(temp)
+            decision = policy.check_command("python -m py_compile snake.py")
+            self.assertTrue(decision.allowed)
+
 
 if __name__ == "__main__":
     unittest.main()

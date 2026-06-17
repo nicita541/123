@@ -99,3 +99,9 @@ class WebTests(unittest.TestCase):
         self.assertIn("/api/tasks/${state.taskId}/approve", script)
         self.assertIn("/api/tasks/${state.taskId}/reject", script)
         self.assertIn("function runGoal", script)
+        self.assertIn("ollama_generation_check", script)
+        self.assertIn("ollama_models", script)
+
+
+if __name__ == "__main__":
+    unittest.main()

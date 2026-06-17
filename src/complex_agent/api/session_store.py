@@ -88,6 +88,7 @@ class SessionStore:
         plan = self.patch_generator.create_plan(task)
         task_session = TaskSession(id=task.id, task=task, plan=plan, status="planned")
         if plan.risks and any("Ollama unavailable" in risk for risk in plan.risks):
+            task_session.status = "failed"
             task_session.events.append(
                 {
                     "type": "llm_unavailable",
@@ -108,7 +109,11 @@ class SessionStore:
             return None
         task_session.status = "proposing_changes"
         try:
-            proposal = self.patch_generator.propose(task_session.task, self.runtime.project_root)
+            proposal = self.patch_generator.propose(
+                task_session.task,
+                self.runtime.project_root,
+                plan=task_session.plan,
+            )
         except Exception as exc:  # noqa: BLE001 - API returns structured task failure
             task_session.status = "failed"
             task_session.events.append(
@@ -199,7 +204,7 @@ class SessionStore:
 
         if not task_session.proposed_patch:
             task_session.status = "failed"
-            task_session.events.append({"type": "run_failed", "title": "Нет proposed patch."})
+            task_session.events.append({"type": "run_failed", "title": "No proposed patch."})
             return task_session
 
         context = ToolContext(project_root=self.runtime.project_root, safety=self.runtime.safety)
@@ -217,38 +222,50 @@ class SessionStore:
         )
         if not apply_result.success:
             task_session.status = "failed"
-            task_session.final_report_text = _build_calculator_report(
+            task_session.final_report_text = _build_patch_report(
                 task_session,
                 changed_files=[],
+                verification_command="",
                 verification_output="",
                 success=False,
                 error=apply_result.error or "Patch failed.",
             )
             return task_session
 
+        task_session.proposed_files = apply_result.changed_files or task_session.proposed_files
+        verification_command = _verification_command(task_session)
         task_session.status = "verifying"
-        verify_result = self.runtime.registry.run(
-            "shell",
-            {"command": "python calculator.py --self-test", "timeout": 30},
-            context,
-        )
-        task_session.verification_output = verify_result.content or verify_result.error or ""
+        if verification_command:
+            verify_result = self.runtime.registry.run(
+                "shell",
+                {"command": verification_command, "timeout": 30},
+                context,
+            )
+            task_session.verification_output = (
+                verify_result.content or verify_result.error or verify_result.summary or ""
+            )
+            success = verify_result.success
+            error = verify_result.error
+        else:
+            task_session.verification_output = "No automated verification command was selected."
+            success = True
+            error = None
+
         task_session.events.append(
             {
                 "type": "verification_finished",
-                "title": verify_result.summary or "Self-test finished.",
-                "status": "completed" if verify_result.success else "failed",
+                "title": verification_command or "No automated verification.",
+                "status": "completed" if success else "failed",
             }
         )
-        success = verify_result.success
         task_session.status = "completed" if success else "failed"
-        task_session.proposed_files = apply_result.changed_files or task_session.proposed_files
-        task_session.final_report_text = _build_calculator_report(
+        task_session.final_report_text = _build_patch_report(
             task_session,
             changed_files=task_session.proposed_files,
+            verification_command=verification_command,
             verification_output=task_session.verification_output,
             success=success,
-            error=verify_result.error,
+            error=error,
         )
         report_path = self.runtime.artifacts.write_text(task_session.final_report_text, suffix=".md")
         task_session.report_path = str(report_path)
@@ -361,44 +378,70 @@ def read_report(path: str | None) -> str:
     return report_path.read_text(encoding="utf-8", errors="replace")
 
 
-def _build_calculator_report(
+def _verification_command(task_session: TaskSession) -> str:
+    if task_session.skill_name == "python_calculator":
+        return "python calculator.py --self-test"
+    py_files = [
+        path.replace("\\", "/")
+        for path in task_session.proposed_files
+        if path.replace("\\", "/").endswith(".py")
+    ]
+    if not py_files:
+        return ""
+    if any(" " in path for path in py_files):
+        raise ValueError("Python file paths with spaces are not supported by the MVP verifier.")
+    return "python -m py_compile " + " ".join(py_files)
+
+
+def _build_patch_report(
     task_session: TaskSession,
     *,
     changed_files: list[str],
+    verification_command: str,
     verification_output: str,
     success: bool,
     error: str | None = None,
 ) -> str:
+    provider = "deterministic" if task_session.skill_name == "python_calculator" else "ollama"
+    heading = "# Готово" if success else "# Завершено с ошибкой"
     lines = [
-        "# Готово" if success else "# Завершено с ошибкой",
+        heading,
+        "",
+        "## Задача",
+        task_session.task.normalized_goal,
+        "",
+        "## Источник изменений",
+        f"- provider: {provider}",
+        f"- skill: {task_session.skill_name or 'unknown'}",
         "",
         "## Что сделано",
-        "- Создан или обновлён calculator.py",
-        "- Добавлены операции +, -, *, /",
-        "- Добавлена обработка деления на ноль",
-        "- Добавлен self-test режим",
-        "",
-        "## Проверки",
-        f"- python calculator.py --self-test: {'успешно' if success else 'ошибка'}",
     ]
+    if changed_files:
+        lines.extend(f"- Создан или обновлён `{path}`" for path in changed_files)
+    else:
+        lines.append("- Файлы не были изменены.")
+
+    lines.extend(["", "## Проверки"])
+    if verification_command:
+        status = "успешно" if success else "ошибка"
+        lines.append(f"- `{verification_command}`: {status}")
+    else:
+        lines.append("- Автоматическая проверка не выбрана для этого patch.")
     if verification_output:
         lines.extend(["", "```text", verification_output.strip(), "```"])
     if error:
         lines.extend(["", "## Ошибка", f"- {error}"])
+
     lines.extend(["", "## Изменённые файлы"])
     lines.extend(f"- {path}" for path in changed_files) if changed_files else lines.append("- Нет")
-    lines.extend(
-        [
-            "",
-            "## Как запустить",
-            "```powershell",
-            "python calculator.py",
-            "```",
-            "",
-            "## Как проверить",
-            "```powershell",
-            "python calculator.py --self-test",
-            "```",
-        ]
-    )
+    lines.extend(["", "## Как запустить вручную"])
+    if "snake.py" in changed_files:
+        lines.extend(["```powershell", "python snake.py", "```"])
+    elif "calculator.py" in changed_files:
+        lines.extend(["```powershell", "python calculator.py", "```"])
+    else:
+        lines.append("Запустите изменённые файлы согласно их назначению.")
+
+    if verification_command:
+        lines.extend(["", "## Как проверить", "```powershell", verification_command, "```"])
     return "\n".join(lines)

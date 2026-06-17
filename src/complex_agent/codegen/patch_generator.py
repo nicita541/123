@@ -1,10 +1,13 @@
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass
 from pathlib import Path
 
+from complex_agent.codegen.ollama_patch_generator import OllamaPatchGenerator
 from complex_agent.core.task import Task
 from complex_agent.llm.ollama_provider import OllamaError, OllamaProvider, OllamaSettings, load_ollama_settings
+from complex_agent.planning.ollama_planner import OllamaPlanner
 from complex_agent.planning.plan import Plan
 from complex_agent.planning.plan_step import PlanStep
 from complex_agent.safety.safety_policy import SafetyPolicy
@@ -26,176 +29,100 @@ class PatchGenerator:
         *,
         settings: OllamaSettings | None = None,
         ollama_provider: OllamaProvider | None = None,
+        allow_demo_fallback: bool | None = None,
     ) -> None:
         self.safety = safety
         self.settings = settings or load_ollama_settings()
         self.ollama_provider = ollama_provider or OllamaProvider.from_settings(self.settings)
+        self.allow_demo_fallback = (
+            _env_truthy("AGENT_ENABLE_DEMO_FALLBACK")
+            if allow_demo_fallback is None
+            else allow_demo_fallback
+        )
         self._calculator = PythonCalculatorSkill()
+        self._ollama_planner = OllamaPlanner(self.ollama_provider, safety)
+        self._ollama_patch_generator = OllamaPatchGenerator(self.ollama_provider, safety)
 
     def supports(self, task_text: str) -> bool:
-        return self._calculator.supports(task_text)
+        return self.allow_demo_fallback and self._calculator.supports(task_text)
 
-    def llm_status(self) -> dict[str, object]:
+    def llm_status(self, *, include_generation_check: bool = True) -> dict[str, object]:
         reachable = False
+        generation_check = False
         error = ""
         models: list[str] = []
         try:
-            models = self.ollama_provider.list_models()
+            models = self.ollama_provider.select_available_model()
             reachable = True
+            if include_generation_check:
+                generation_check = self.ollama_provider.generation_check()
         except Exception as exc:  # noqa: BLE001 - status must not break read-only calls
             error = str(exc)
         return {
             "llm_provider": self.settings.provider,
             "fallback_provider": self.settings.fallback_provider,
             "ollama_base_url": self.settings.base_url,
-            "ollama_model": self.settings.model,
+            "ollama_model": self.ollama_provider.model,
             "ollama_reachable": reachable,
+            "ollama_generation_check": generation_check,
             "ollama_models": models,
             "ollama_error": error,
+            "demo_fallback_enabled": self.allow_demo_fallback,
         }
 
     def create_plan(self, task: Task) -> Plan:
         if self.supports(task.normalized_goal):
             return self._calculator.create_plan(task)
         try:
-            return self._create_ollama_plan(task)
-        except OllamaError as exc:
-            plan = Plan.create(
-                task_id=task.id,
-                goal=task.normalized_goal,
-                steps=[
-                    PlanStep.create(
-                        type="llm_unavailable",
-                        description=f"Ollama недоступен: {exc}. Доступен deterministic fallback.",
-                        required_tool="final_report",
-                        input={"message": task.normalized_goal},
-                    )
-                ],
-            )
-            plan.risks.append("Ollama unavailable; no patch will be proposed for unknown task.")
+            plan, _metadata = self._ollama_planner.create_plan(task)
             return plan
+        except OllamaError as exc:
+            return _ollama_unavailable_plan(task, exc)
 
-    def _create_ollama_plan(self, task: Task) -> Plan:
-        response = self.ollama_provider.complete_structured(
-            _plan_prompt(task.normalized_goal),
-            {
-                "steps": [
-                    {
-                        "type": "analysis",
-                        "description": "Short implementation step",
-                        "tool": "read_file|search_files|apply_patch|shell|final_report",
-                        "risk": "low|medium|high",
-                    }
-                ],
-                "risks": ["optional risks"],
-            },
-        )
-        if not isinstance(response, dict) or not isinstance(response.get("steps"), list):
-            raise OllamaError("Ollama plan response must be a JSON object with a steps list.")
-
-        steps: list[PlanStep] = []
-        allowed_tools = {"read_file", "search_files", "apply_patch", "shell", "final_report"}
-        for raw in response["steps"][:8]:
-            if not isinstance(raw, dict):
-                continue
-            tool = str(raw.get("tool", "final_report"))
-            steps.append(
-                PlanStep.create(
-                    type=str(raw.get("type", "analysis")),
-                    description=str(raw.get("description", "Шаг плана от локальной модели.")),
-                    required_tool=tool if tool in allowed_tools else "final_report",
-                    input={},
-                    approval_required=tool == "apply_patch",
-                )
+    def propose(self, task: Task, project_root: Path, *, plan: Plan | None = None) -> ProposedPatch:
+        if self.supports(task.normalized_goal):
+            proposal = self._calculator.propose(task, project_root)
+            self.validate_patch(proposal.patch)
+            return ProposedPatch(
+                skill_name=self._calculator.name,
+                patch=proposal.patch,
+                changed_files=proposal.changed_files,
+                summary=proposal.summary,
             )
-        if not steps:
-            raise OllamaError("Ollama plan did not contain usable steps.")
-
-        plan = Plan.create(task_id=task.id, goal=task.normalized_goal, steps=steps)
-        risks = response.get("risks", [])
-        if isinstance(risks, list):
-            plan.risks.extend(str(item) for item in risks[:5])
-        plan.approval_points.append(
-            "Любой patch от Ollama требует проверки и подтверждения."
+        proposal = self._ollama_patch_generator.propose(
+            task_text=task.normalized_goal,
+            plan=plan,
+            project_root=project_root,
         )
-        return plan
-
-    def propose(self, task: Task, project_root: Path) -> ProposedPatch:
-        if not self.supports(task.normalized_goal):
-            return self._propose_with_ollama(task)
-        proposal = self._calculator.propose(task, project_root)
-        self.validate_patch(proposal.patch)
         return ProposedPatch(
-            skill_name=self._calculator.name,
+            skill_name="ollama",
             patch=proposal.patch,
             changed_files=proposal.changed_files,
             summary=proposal.summary,
         )
 
-    def _propose_with_ollama(self, task: Task) -> ProposedPatch:
-        text = self.ollama_provider.complete(_patch_prompt(task.normalized_goal)).strip()
-        patch = _extract_diff(text)
-        self.validate_patch(patch)
-        return ProposedPatch(
-            skill_name="ollama",
-            patch=patch,
-            changed_files=_extract_patch_paths(patch),
-            summary="Ollama предложил unified diff. Patch требует подтверждения.",
-        )
-
     def validate_patch(self, patch: str) -> None:
-        if not patch.strip():
-            raise ValueError("Patch is empty.")
-        paths = _extract_patch_paths(patch)
-        if not paths:
-            raise ValueError("Patch does not contain target files.")
-        for path in paths:
-            allowed, reason = self.safety.file_guard.validate_write(self.safety.project_root / path)
-            if not allowed:
-                raise ValueError(reason)
+        self._ollama_patch_generator.validate_patch(patch)
 
 
-def _extract_patch_paths(patch: str) -> list[str]:
-    paths: list[str] = []
-    for line in patch.splitlines():
-        if not line.startswith(("--- ", "+++ ")):
-            continue
-        raw = line[4:].strip()
-        if raw == "/dev/null":
-            continue
-        path = raw[2:] if raw.startswith(("a/", "b/")) else raw
-        if path not in paths:
-            paths.append(path)
-    return paths
-
-
-def _plan_prompt(task_text: str) -> str:
-    return (
-        "Ты локальный coding-agent planner. Верни только JSON без markdown. "
-        "Не предлагай прямую запись файлов и не запускай команды. "
-        f"Задача: {task_text}"
+def _ollama_unavailable_plan(task: Task, exc: Exception) -> Plan:
+    plan = Plan.create(
+        task_id=task.id,
+        goal=task.normalized_goal,
+        steps=[
+            PlanStep.create(
+                type="llm_unavailable",
+                description=(
+                    "Ollama недоступна. Задача не может быть выполнена без локальной модели."
+                ),
+                required_tool="final_report",
+                input={"message": task.normalized_goal, "error": str(exc)},
+            )
+        ],
     )
+    plan.risks.append(f"Ollama unavailable: {exc}")
+    return plan
 
 
-def _patch_prompt(task_text: str) -> str:
-    return (
-        "Ты локальный coding-agent. Предложи только unified diff для задачи. "
-        "Не используй .env, .agent, .venv, __pycache__, secret/token/private key paths. "
-        "Не добавляй объяснения вне diff. "
-        f"Задача: {task_text}"
-    )
-
-
-def _extract_diff(text: str) -> str:
-    if "```" in text:
-        chunks = text.split("```")
-        for chunk in chunks:
-            candidate = chunk.strip()
-            if candidate.startswith("diff") or candidate.startswith("--- "):
-                return candidate + "\n"
-    start = text.find("--- ")
-    if start == -1:
-        start = text.find("diff --git ")
-    if start == -1:
-        raise OllamaError("Ollama did not return a unified diff.")
-    return text[start:].strip() + "\n"
+def _env_truthy(name: str) -> bool:
+    return os.environ.get(name, "").strip().lower() in {"1", "true", "yes", "on"}

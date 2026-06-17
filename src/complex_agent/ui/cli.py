@@ -27,6 +27,10 @@ def build_parser() -> argparse.ArgumentParser:
     serve.add_argument("--project", dest="serve_project", default=None, help="Project root path.")
     serve.add_argument("--host", default="127.0.0.1", help="Host to bind. Defaults to localhost.")
     serve.add_argument("--port", default=8765, type=int, help="Port to bind.")
+    desktop = sub.add_parser("desktop")
+    desktop.add_argument("--project", dest="desktop_project", default=None, help="Project root path.")
+    desktop.add_argument("--host", default="127.0.0.1", help="Host to bind. Defaults to localhost.")
+    desktop.add_argument("--port", default=0, type=int, help="Port to bind. Use 0 for a free port.")
     return parser
 
 
@@ -45,12 +49,26 @@ def run_serve(project_path: str | Path, *, host: str, port: int) -> int:
     return 0
 
 
+def run_desktop(project_path: str | Path, *, host: str, port: int) -> int:
+    from complex_agent.desktop.app import run_desktop_app
+
+    try:
+        run_desktop_app(project_path=project_path, host=host, port=port or None)
+    except RuntimeError as exc:
+        print(str(exc))
+        return 1
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
     if args.command == "serve":
         project = Path(args.serve_project or args.project)
         return run_serve(project, host=args.host, port=args.port)
+    if args.command == "desktop":
+        project = Path(args.desktop_project or args.project)
+        return run_desktop(project, host=args.host, port=args.port)
     runtime = AgentRuntime(project_path=Path(args.project), auto_approve=bool(args.yes))
     renderer = ConsoleRenderer()
 
@@ -82,6 +100,9 @@ def main(argv: list[str] | None = None) -> int:
         print(f"Ollama base URL: {llm_status['ollama_base_url']}")
         print(f"Ollama model: {llm_status['ollama_model']}")
         print(f"Ollama reachable: {'yes' if llm_status['ollama_reachable'] else 'no'}")
+        print(f"Ollama generation check: {'yes' if llm_status['ollama_generation_check'] else 'no'}")
+        models = llm_status.get("ollama_models", [])
+        print("Ollama models: " + (", ".join(str(model) for model in models) if models else "none"))
         return 0
     if args.command == "history":
         for row in runtime.run_store.list_runs():

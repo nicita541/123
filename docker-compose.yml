@@ -1,0 +1,36 @@
+services:
+  agent-app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "8765:8765"
+    environment:
+      AGENT_PROJECT_ROOT: /workspace
+      OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-http://host.docker.internal:11434}
+      OLLAMA_MODEL: ${OLLAMA_MODEL:-qwen2.5-coder:7b-instruct}
+    volumes:
+      - ${AGENT_WORKSPACE:-./examples/demo_project}:/workspace
+    command:
+      - python
+      - -m
+      - complex_agent.main
+      - serve
+      - --project
+      - /workspace
+      - --host
+      - 0.0.0.0
+      - --port
+      - "8765"
+
+  ollama:
+    image: ollama/ollama:latest
+    profiles:
+      - ollama
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama-data:/root/.ollama
+
+volumes:
+  ollama-data:

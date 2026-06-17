@@ -20,6 +20,7 @@ class CommandGuard:
         "rg",
         "pytest",
         "python calculator.py --self-test",
+        "python -m py_compile",
         "python -m pytest",
         "ruff check",
         "mypy",

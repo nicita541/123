@@ -8,7 +8,12 @@ import urllib.error
 from pathlib import Path
 from unittest.mock import patch
 
-from complex_agent.llm.ollama_provider import OllamaError, OllamaProvider, load_ollama_settings
+from complex_agent.llm.ollama_provider import (
+    OllamaError,
+    OllamaProvider,
+    choose_ollama_model,
+    load_ollama_settings,
+)
 
 
 class _FakeResponse:
@@ -70,6 +75,39 @@ class OllamaProviderTests(unittest.TestCase):
         self.assertEqual(request.full_url, "http://127.0.0.1:11434/api/tags")
         self.assertEqual(request.get_method(), "GET")
         self.assertEqual(timeout, 5)
+
+    def test_select_available_model_uses_priority_when_configured_missing(self) -> None:
+        def fake_urlopen(request, timeout):  # type: ignore[no-untyped-def]
+            return _FakeResponse(
+                {
+                    "models": [
+                        {"name": "llama3.1:8b"},
+                        {"name": "qwen3:8b"},
+                        {"name": "qwen2.5-coder:14b"},
+                    ]
+                }
+            )
+
+        provider = OllamaProvider(model="missing-model", urlopen=fake_urlopen)
+        models = provider.select_available_model()
+        self.assertEqual(models, ["llama3.1:8b", "qwen3:8b", "qwen2.5-coder:14b"])
+        self.assertEqual(provider.model, "qwen2.5-coder:14b")
+
+    def test_choose_ollama_model_prefers_configured_when_present(self) -> None:
+        selected = choose_ollama_model("qwen3:8b", ["qwen2.5-coder:14b", "qwen3:8b"])
+        self.assertEqual(selected, "qwen3:8b")
+
+    def test_generation_check_uses_selected_model(self) -> None:
+        calls = []
+
+        def fake_urlopen(request, timeout):  # type: ignore[no-untyped-def]
+            calls.append(request)
+            return _FakeResponse({"response": "OK"})
+
+        provider = OllamaProvider(model="qwen3:8b", urlopen=fake_urlopen)
+        self.assertTrue(provider.generation_check())
+        body = json.loads(calls[0].data.decode("utf-8"))
+        self.assertEqual(body["model"], "qwen3:8b")
 
     def test_env_override_config(self) -> None:
         with tempfile.TemporaryDirectory() as temp:

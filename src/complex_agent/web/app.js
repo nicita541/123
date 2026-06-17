@@ -169,7 +169,7 @@ function renderDiffCard(data) {
       <p class="muted">Изменено ${state.proposedFiles.length} файл(ов)</p>
       <ul class="changed-files">${files}</ul>
       <details>
-        <summary>Показать diff</summary>
+        <summary>Показать Diff</summary>
         <pre class="diff-code">${escapeHtml(state.proposedDiff || "Изменений пока нет.")}</pre>
       </details>
     `
@@ -223,7 +223,7 @@ function renderRunResult(data) {
 }
 
 function renderFailure(data) {
-  const detail = (data.events || []).at(-1)?.detail || "Для этой задачи нужна локальная модель Ollama. Сейчас Ollama недоступна.";
+  const detail = (data.events || []).at(-1)?.detail || "Для этой задачи нужна локальная модель Ollama. Сейчас она недоступна.";
   addFeedCard(
     "system-card",
     `
@@ -247,16 +247,26 @@ async function loadStatus() {
   $("envProject").textContent = project.project_root;
   $("envBranch").textContent = workspace.git_branch || "нет ветки";
   $("envChanges").textContent = `${workspace.changed_files.length} файлов`;
-  $("envProvider").textContent = status.llm_provider || "deterministic";
-  $("envModel").textContent = status.ollama_model ? `Ollama · ${status.ollama_model}` : "deterministic";
-  $("envModelStatus").textContent = status.ollama_reachable
-    ? "Подключено"
-    : "Ollama недоступен · deterministic fallback";
-  $("agentSelector").innerHTML = `<option>${escapeHtml(
-    status.ollama_reachable && status.ollama_model
-      ? `Ollama · ${status.ollama_model}`
-      : "Локальный агент"
-  )}</option>`;
+  $("envProvider").textContent = status.llm_provider === "ollama" ? "Ollama" : status.llm_provider || "deterministic";
+  $("envModel").textContent = status.ollama_model ? status.ollama_model : "deterministic fallback";
+  if (status.ollama_reachable && status.ollama_generation_check) {
+    $("envModelStatus").textContent = "Подключено";
+  } else if (status.ollama_reachable) {
+    $("envModelStatus").textContent = "Ollama отвечает · generation_check failed";
+  } else {
+    $("envModelStatus").textContent = "Ollama недоступен · deterministic fallback";
+  }
+  const models = status.ollama_models || [];
+  if (status.ollama_reachable && models.length) {
+    $("agentSelector").innerHTML = models
+      .map((model) => {
+        const selected = model === status.ollama_model ? " selected" : "";
+        return `<option${selected}>Ollama · ${escapeHtml(model)}</option>`;
+      })
+      .join("");
+  } else {
+    $("agentSelector").innerHTML = "<option>Локальный агент</option>";
+  }
   $("envSources").innerHTML =
     (workspace.files || [])
       .slice(0, 4)
@@ -338,7 +348,7 @@ async function runGoal() {
     return;
   }
   if (state.status === "waiting_approval") {
-    renderSystemEvent("Нужно подтвердить предложенный diff перед записью файлов.");
+    renderSystemEvent("Нужно подтвердить предложенный Diff перед записью файлов.");
     return;
   }
   await runTask();
@@ -353,7 +363,7 @@ async function approve(approval) {
       body: JSON.stringify({ step_id: approval.step_id, action: approval.action }),
     });
     setStatus(data.status);
-    renderSystemEvent("Изменение подтверждено. Запускаю применение patch и self-test.");
+    renderSystemEvent("Изменение подтверждено. Запускаю применение patch и проверку.");
     await runTask();
   } catch (error) {
     handleError(error);
@@ -426,6 +436,7 @@ function setupEvents() {
   $("refreshBtn").onclick = () => loadStatus().catch(handleError);
   $("envCheckBtn").onclick = () => submitTask("Проведи аудит проекта");
   $("envDiffBtn").onclick = showCurrentDiff;
+  $("commitBtn").onclick = () => renderSystemEvent("Создание commit отключено в MVP.");
   $("chooseProjectBtn").onclick = () => {
     $("projectForm").hidden = false;
     $("projectInput").focus();

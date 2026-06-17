@@ -60,13 +60,13 @@
         <div id="emptyState" class="empty-state">
           <h2>Что изменить в проекте?</h2>
           <p>
-            Опишите задачу. Агент составит план, покажет изменения и попросит подтверждение
+            Опишите задачу. Агент составит план, покажет Diff и попросит подтверждение
             перед записью файлов.
           </p>
           <div class="quick-prompts">
             <button type="button">Создай консольный калькулятор на Python</button>
+            <button type="button">Создай snake.py: простая консольная змейка на Python без внешних зависимостей</button>
             <button type="button">Проведи аудит проекта</button>
-            <button type="button">Добавь README с инструкцией запуска</button>
             <button type="button">Найди проблемы безопасности</button>
           </div>
         </div>
@@ -120,8 +120,8 @@
         </div>
         <div class="env-actions">
           <button id="envCheckBtn" type="button">Проверить</button>
-          <button id="envDiffBtn" type="button">Открыть diff</button>
-          <button type="button" data-disabled disabled>Создать коммит</button>
+          <button id="envDiffBtn" type="button">Открыть Diff</button>
+          <button id="commitBtn" type="button" data-disabled disabled>Создать коммит</button>
         </div>
       </aside>
     </main>
