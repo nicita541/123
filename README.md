@@ -61,6 +61,27 @@ Minimal workflow:
 
 See `docs/mvp2_local_agent_app.md` for endpoint details and MVP 2 limits.
 
+## Codex-like Local Workspace
+
+MVP 3 keeps the same local-only backend but presents it as a Russian coding-agent workspace: `Рабочая область`, `Чат + задача`, `План / действия`, and bottom `Workbench`.
+
+Run from `F:\aiAgent`:
+
+```powershell
+.venv\Scripts\python.exe -m complex_agent.main serve --project . --host 127.0.0.1 --port 8765
+```
+
+Workflow:
+
+1. Open `http://127.0.0.1:8765`.
+2. Browse safe project files in `Рабочая область`.
+3. Enter a task in `Чат + задача`.
+4. Use `Составить план`, then review the right-side plan.
+5. Use `Выполнить` and handle `Подтверждение` cards when required.
+6. Inspect `Diff`, `Терминал`, `Проверки`, `Журнал`, and `Отчёт`.
+
+See `docs/mvp3_codex_like_workspace.md` for added endpoints and MVP 3 safety limits.
+
 ## Development
 
 ```powershell

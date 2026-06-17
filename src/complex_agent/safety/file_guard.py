@@ -20,7 +20,7 @@ class FileGuard:
         }
     )
     forbidden_segments: set[str] = field(
-        default_factory=lambda: {".git", ".venv", "venv", "node_modules", "__pycache__"}
+        default_factory=lambda: {".agent", ".git", ".venv", "venv", "node_modules", "__pycache__"}
     )
     forbidden_suffixes: tuple[str, ...] = (".pem", ".key", ".pfx", ".p12")
     max_file_size_bytes: int = 1_048_576
@@ -64,4 +64,3 @@ class FileGuard:
         if "/secret" in normalized or "/token" in normalized:
             return False, f"Path appears sensitive: {path.name}"
         return True, "allowed"
-

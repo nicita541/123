@@ -4,15 +4,25 @@ import sqlite3
 from pathlib import Path
 from typing import Any
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, HTTPException, Query, Request
 
-from complex_agent.api.schemas import ApprovalRequestModel, ChatRequest, PlanRequest
+from complex_agent.api.schemas import (
+    ApprovalRequestModel,
+    ChatRequest,
+    FileListResponse,
+    FilePreviewResponse,
+    GitDiffResponse,
+    PlanRequest,
+    TimelineResponse,
+    WorkspaceResponse,
+)
 from complex_agent.api.session_store import (
     SessionStore,
     parse_mode,
     read_report,
     serialize_task_session,
 )
+from complex_agent.tools.base_tool import ToolContext
 
 
 def create_router(store: SessionStore) -> APIRouter:
@@ -35,6 +45,47 @@ def create_router(store: SessionStore) -> APIRouter:
     @router.get("/api/tools")
     def tools() -> dict[str, Any]:
         return {"tools": store.runtime.registry.list_tool_info(include_all=True)}
+
+    @router.get("/api/workspace", response_model=WorkspaceResponse)
+    def workspace() -> dict[str, Any]:
+        files = _safe_file_items(store, limit=300)
+        changed_files = _changed_files(store)
+        return {
+            "project_root": str(store.runtime.project_root),
+            "git_branch": _git_branch(store),
+            "important_directories": _important_directories(store),
+            "files": files[:80],
+            "changed_files": changed_files,
+            "tool_count": len(store.runtime.registry.list_tool_info(include_all=True)),
+            "enabled_tool_count": len(store.runtime.registry.list_tools()),
+            "status": "ready",
+        }
+
+    @router.get("/api/files", response_model=FileListResponse)
+    def files(limit: int = Query(default=500, ge=1, le=1000)) -> dict[str, Any]:
+        items = _safe_file_items(store, limit=limit)
+        return {"files": items, "count": len(items)}
+
+    @router.get("/api/files/preview", response_model=FilePreviewResponse)
+    def file_preview(path: str) -> dict[str, Any]:
+        target = store.runtime.project_root / path
+        allowed, reason = store.runtime.safety.file_guard.validate_read(target)
+        if not allowed:
+            status_code = 404 if "does not exist" in reason.lower() else 403
+            raise HTTPException(status_code=status_code, detail="File preview is not available.")
+        result = _run_tool(store, "read_file", {"path": path})
+        if not result.success:
+            raise HTTPException(status_code=403, detail="File preview is not available.")
+        content = store.runtime.safety.redact(result.content)
+        max_chars = 20_000
+        truncated = len(content) > max_chars
+        return {"path": path, "content": content[:max_chars], "truncated": truncated}
+
+    @router.get("/api/git/diff", response_model=GitDiffResponse)
+    def git_diff() -> dict[str, Any]:
+        result = _run_tool(store, "git_diff", {})
+        diff = store.runtime.safety.redact(result.content if result.success else "")
+        return {"diff": diff, "changed_files": _changed_files(store)}
 
     @router.post("/api/chat")
     def chat(payload: ChatRequest) -> dict[str, Any]:
@@ -85,6 +136,33 @@ def create_router(store: SessionStore) -> APIRouter:
         if task_session is None:
             raise HTTPException(status_code=404, detail="Unknown task.")
         return {"events": task_session.events}
+
+    @router.get("/api/tasks/{task_id}/timeline", response_model=TimelineResponse)
+    def get_timeline(task_id: str) -> dict[str, Any]:
+        task_session = store.get_task(task_id)
+        if task_session is None:
+            raise HTTPException(status_code=404, detail="Unknown task.")
+        events = []
+        if task_session.status:
+            events.append(
+                {
+                    "type": "task_status",
+                    "title": _event_title("task_status"),
+                    "status": task_session.status,
+                }
+            )
+        for event in task_session.events:
+            event_type = str(event.get("type", "event"))
+            events.append(
+                {
+                    "type": event_type,
+                    "title": _event_title(event_type),
+                    "step_id": event.get("step_id"),
+                    "action": event.get("action"),
+                    "status": event.get("status"),
+                }
+            )
+        return {"task_id": task_id, "events": events}
 
     @router.get("/api/tasks/{task_id}/report")
     def get_report(task_id: str) -> dict[str, Any]:
@@ -142,3 +220,118 @@ def _validate_project_path(project_path: str | None, configured_root: Path) -> N
     if requested != configured_root:
         raise HTTPException(status_code=400, detail="MVP 2 uses the configured project root only.")
 
+
+def _tool_context(store: SessionStore) -> ToolContext:
+    return ToolContext(project_root=store.runtime.project_root, safety=store.runtime.safety)
+
+
+def _run_tool(store: SessionStore, name: str, data: dict[str, object]):
+    return store.runtime.registry.run(name, data, _tool_context(store))
+
+
+def _safe_file_items(store: SessionStore, *, limit: int) -> list[dict[str, str]]:
+    result = _run_tool(store, "list_files", {"path": ".", "pattern": "*", "limit": limit})
+    if not result.success:
+        return []
+    items = []
+    for line in result.content.splitlines():
+        path = line.strip()
+        if not path:
+            continue
+        allowed, _ = store.runtime.safety.file_guard.validate_read(store.runtime.project_root / path)
+        if not allowed:
+            continue
+        file_path = Path(path)
+        items.append(
+            {
+                "path": path,
+                "name": file_path.name,
+                "directory": file_path.parent.as_posix() if file_path.parent.as_posix() != "." else "",
+                "extension": file_path.suffix,
+            }
+        )
+    return items
+
+
+def _important_directories(store: SessionStore) -> list[str]:
+    directories = []
+    for name in ["src", "tests", "docs", "config", "examples"]:
+        path = store.runtime.project_root / name
+        allowed, _ = store.runtime.safety.file_guard.validate_read(path)
+        if allowed and path.is_dir():
+            directories.append(name)
+    return directories
+
+
+def _git_branch(store: SessionStore) -> str | None:
+    result = _run_tool(store, "git_branch", {})
+    if not result.success:
+        return None
+    branch = store.runtime.safety.redact(result.content).strip()
+    return branch or None
+
+
+def _changed_files(store: SessionStore) -> list[dict[str, str]]:
+    collected: dict[str, str] = {}
+    for task_session in store.task_sessions.values():
+        if not task_session.state:
+            continue
+        for path in task_session.state.changed_files:
+            if _safe_changed_path(store, path):
+                collected[path] = "modified"
+    if collected:
+        return [{"path": path, "status": status} for path, status in sorted(collected.items())]
+
+    result = _run_tool(store, "git_status", {})
+    if not result.success:
+        return []
+    for line in result.content.splitlines():
+        parsed = _parse_git_status_line(line)
+        if parsed is None:
+            continue
+        path, status = parsed
+        if _safe_changed_path(store, path):
+            collected[path] = status
+    return [{"path": path, "status": status} for path, status in sorted(collected.items())]
+
+
+def _safe_changed_path(store: SessionStore, path: str) -> bool:
+    normalized = path.replace("\\", "/").strip()
+    if not normalized:
+        return False
+    if " -> " in normalized:
+        normalized = normalized.rsplit(" -> ", 1)[-1]
+    allowed, _ = store.runtime.safety.file_guard.validate_write(store.runtime.project_root / normalized)
+    return allowed
+
+
+def _parse_git_status_line(line: str) -> tuple[str, str] | None:
+    if len(line) < 4:
+        return None
+    code = line[:2]
+    path = line[3:].strip()
+    if not path:
+        return None
+    if "A" in code or "??" in code:
+        status = "added"
+    elif "D" in code:
+        status = "deleted"
+    else:
+        status = "modified"
+    return path, status
+
+
+def _event_title(event_type: str) -> str:
+    titles = {
+        "task_status": "Состояние задачи",
+        "pending_approval": "Ожидается подтверждение",
+        "approval_granted": "Действие подтверждено",
+        "approval_rejected": "Действие отклонено",
+        "task_started": "Задача запущена",
+        "task_finished": "Задача завершена",
+        "step_started": "Шаг запущен",
+        "step_finished": "Шаг завершён",
+        "tool_called": "Инструмент вызван",
+        "tool_finished": "Инструмент завершён",
+    }
+    return titles.get(event_type, event_type)

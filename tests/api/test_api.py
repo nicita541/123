@@ -73,6 +73,81 @@ class ApiTests(unittest.TestCase):
             self.assertNotIn(".env", text)
             self.assertNotIn("abc123", text)
 
+    def test_workspace_does_not_create_agent_state(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            (root / "src").mkdir()
+            (root / "src" / "app.py").write_text("print('ok')\n", encoding="utf-8")
+            client = TestClient(create_app(project_path=root))
+            response = client.get("/api/workspace")
+            self.assertEqual(response.status_code, 200)
+            data = response.json()
+            self.assertEqual(data["project_root"], str(root.resolve()))
+            self.assertIn("src", data["important_directories"])
+            self.assertFalse((root / ".agent").exists())
+
+    def test_files_endpoint_hides_forbidden_paths(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            (root / "src").mkdir()
+            (root / "src" / "app.py").write_text("print('ok')\n", encoding="utf-8")
+            (root / ".env").write_text("token=abc\n", encoding="utf-8")
+            (root / ".agent").mkdir()
+            (root / ".agent" / "run.log").write_text("internal\n", encoding="utf-8")
+            (root / ".venv").mkdir()
+            (root / ".venv" / "hidden.py").write_text("hidden\n", encoding="utf-8")
+            (root / "__pycache__").mkdir()
+            (root / "__pycache__" / "cached.pyc").write_text("cached\n", encoding="utf-8")
+            (root / "secret").mkdir()
+            (root / "secret" / "notes.txt").write_text("secret=abc\n", encoding="utf-8")
+            client = TestClient(create_app(project_path=root))
+            response = client.get("/api/files")
+            self.assertEqual(response.status_code, 200)
+            text = response.text
+            self.assertIn("src/app.py", text)
+            self.assertNotIn(".env", text)
+            self.assertNotIn(".agent", text)
+            self.assertNotIn(".venv", text)
+            self.assertNotIn("__pycache__", text)
+            self.assertNotIn("secret/notes.txt", text)
+
+    def test_file_preview_reads_safe_file_redacts_and_blocks_env(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            (root / "src").mkdir()
+            (root / "src" / "app.py").write_text("token=abc123\nprint('ok')\n", encoding="utf-8")
+            (root / ".env").write_text("token=abc123\n", encoding="utf-8")
+            client = TestClient(create_app(project_path=root))
+            preview = client.get("/api/files/preview", params={"path": "src/app.py"})
+            self.assertEqual(preview.status_code, 200)
+            self.assertEqual(preview.json()["path"], "src/app.py")
+            self.assertIn("[REDACTED]", preview.json()["content"])
+            self.assertNotIn("abc123", preview.json()["content"])
+            blocked = client.get("/api/files/preview", params={"path": ".env"})
+            self.assertEqual(blocked.status_code, 403)
+            self.assertNotIn("abc123", blocked.text)
+
+    def test_git_diff_endpoint_is_safe_outside_git_repo(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            client = TestClient(create_app(project_path=temp))
+            response = client.get("/api/git/diff")
+            self.assertEqual(response.status_code, 200)
+            self.assertEqual(response.json()["diff"], "")
+            self.assertEqual(response.json()["changed_files"], [])
+
+    def test_timeline_returns_ui_events_for_known_task(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            client = TestClient(create_app(project_path=temp))
+            plan = client.post("/api/tasks/plan", json={"task": "Audit", "mode": "review"})
+            self.assertEqual(plan.status_code, 200)
+            task_id = plan.json()["task_id"]
+            timeline = client.get(f"/api/tasks/{task_id}/timeline")
+            self.assertEqual(timeline.status_code, 200)
+            data = timeline.json()
+            self.assertEqual(data["task_id"], task_id)
+            self.assertTrue(data["events"])
+            self.assertEqual(client.get("/api/tasks/missing/timeline").status_code, 404)
+
     def test_approval_endpoint_requires_known_task_action(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             client = TestClient(create_app(project_path=temp))
