@@ -1,0 +1,9 @@
+planner_model: mock
+executor_model: mock
+reviewer_model: mock
+summarizer_model: mock
+debugger_model: mock
+temperature: 0.1
+max_tokens: 4000
+retry_count: 2
+

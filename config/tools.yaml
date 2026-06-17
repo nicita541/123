@@ -1,0 +1,39 @@
+enabled:
+  - list_files
+  - read_file
+  - search_files
+  - apply_patch
+  - shell
+  - git_status
+  - git_diff
+  - git_show
+  - git_log
+  - project_scan
+allowed_paths:
+  - .
+denied_paths:
+  - .git
+  - .env
+  - .venv
+  - venv
+  - node_modules
+shell_timeout_seconds: 30
+allowed_commands:
+  - git status
+  - git diff
+  - git show
+  - git log
+  - rg
+  - pytest
+  - python -m pytest
+  - ruff check
+  - mypy
+  - dotnet build
+  - dotnet test
+blocked_commands:
+  - git push
+  - git reset --hard
+  - git clean
+  - rm -rf
+  - Remove-Item -Recurse
+

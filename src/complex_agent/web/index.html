@@ -1,0 +1,184 @@
+<!doctype html>
+<html lang="ru">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Комплексный ИИ-агент</title>
+    <link rel="stylesheet" href="/static/styles.css" />
+  </head>
+  <body>
+    <div id="toast" class="toast" hidden></div>
+
+    <header class="app-header">
+      <div class="brand">
+        <div>
+          <h1>Комплексный ИИ-агент</h1>
+          <span class="badge local">Локальный режим</span>
+        </div>
+      </div>
+      <div class="header-meta">
+        <div class="meta-item">
+          <span class="meta-label">Проект</span>
+          <strong id="projectPath">Загрузка...</strong>
+        </div>
+        <div class="meta-item">
+          <span class="meta-label">Сервер</span>
+          <strong id="backendStatus" class="status-ok">Подключение...</strong>
+        </div>
+        <label class="mode-control">
+          <span class="meta-label">Режим</span>
+          <select id="mode">
+            <option value="plan">Планирование</option>
+            <option value="review" selected>Обзор</option>
+            <option value="dev">Разработка</option>
+          </select>
+        </label>
+      </div>
+      <div class="header-actions">
+        <button id="refreshBtn" class="btn secondary">Обновить</button>
+        <button id="openReportBtn" class="btn secondary" disabled>Открыть отчёт</button>
+      </div>
+    </header>
+
+    <main class="app-shell">
+      <aside class="sidebar">
+        <section class="panel">
+          <h2>Проект</h2>
+          <dl class="project-facts">
+            <div>
+              <dt>Путь</dt>
+              <dd id="projectPathShort">...</dd>
+            </div>
+            <div>
+              <dt>Тип</dt>
+              <dd id="projectType">Локальный проект</dd>
+            </div>
+            <div>
+              <dt>Инструменты</dt>
+              <dd id="toolCount">0 активных</dd>
+            </div>
+            <div>
+              <dt>Последняя задача</dt>
+              <dd id="lastTask">Нет</dd>
+            </div>
+          </dl>
+        </section>
+
+        <section class="panel">
+          <h2>Навигация</h2>
+          <nav class="nav-list">
+            <a href="#chat">Чат</a>
+            <a href="#planSection">План</a>
+            <a href="#changesSection">Изменения</a>
+            <a href="#reportTab">Отчёт</a>
+            <a href="#bottomPanel">Журнал</a>
+          </nav>
+        </section>
+
+        <section class="panel tools-panel">
+          <button id="toolsToggle" class="section-toggle" type="button">
+            Инструменты <span id="toolsToggleText">показать</span>
+          </button>
+          <div id="toolsBody" class="tools-body" hidden>
+            <div id="enabledTools" class="chips"></div>
+            <button id="technicalToggle" class="link-button" type="button">Показать технические</button>
+            <div id="technicalTools" class="chips muted-chips" hidden></div>
+          </div>
+        </section>
+
+        <section class="panel">
+          <h2>Задачи</h2>
+          <ul id="tasks" class="task-list">
+            <li class="muted">Пока нет задач</li>
+          </ul>
+        </section>
+      </aside>
+
+      <section id="chat" class="chat-panel">
+        <div class="workflow">
+          <span id="wfIdle" class="workflow-step active">Задача</span>
+          <span id="wfPlanned" class="workflow-step">План</span>
+          <span id="wfApproval" class="workflow-step">Подтверждение</span>
+          <span id="wfRun" class="workflow-step">Выполнение</span>
+          <span id="wfDone" class="workflow-step">Результат</span>
+        </div>
+        <div id="messages" class="messages" aria-live="polite">
+          <div class="message system">
+            <div class="message-bubble">
+              <span class="message-role">Система</span>
+              <p>Опишите задачу. Сначала агент создаст план, затем вы сможете запустить выполнение.</p>
+            </div>
+          </div>
+        </div>
+        <div class="composer">
+          <p class="safety-note">Без подтверждения агент не изменяет файлы и не запускает опасные команды.</p>
+          <textarea id="taskInput" rows="4" placeholder="Опишите задачу для агента..."></textarea>
+          <div class="actions">
+            <button id="sendBtn" class="btn secondary">Отправить</button>
+            <button id="planBtn" class="btn primary">Создать план</button>
+            <button id="runBtn" class="btn success" disabled>Выполнить план</button>
+            <button id="abortBtn" class="btn danger" disabled>Остановить</button>
+          </div>
+        </div>
+      </section>
+
+      <aside class="task-panel">
+        <section id="planSection" class="panel">
+          <div class="panel-header">
+            <h2>Текущий план</h2>
+            <span id="taskStatusBadge" class="badge neutral">Нет задачи</span>
+          </div>
+          <div id="plan" class="plan-cards">
+            <p class="empty">План ещё не создан.</p>
+          </div>
+        </section>
+
+        <section class="panel">
+          <h2>Ожидают подтверждения</h2>
+          <div id="approvals" class="approvals">
+            <p class="empty">Нет действий, ожидающих подтверждения.</p>
+          </div>
+        </section>
+
+        <section id="changesSection" class="panel">
+          <h2>Изменённые файлы</h2>
+          <ul id="changedFiles" class="file-list">
+            <li class="empty">Изменённых файлов пока нет.</li>
+          </ul>
+        </section>
+
+        <section class="panel result-panel">
+          <h2>Итоговый результат</h2>
+          <p id="resultSummary">Ожидает задачи.</p>
+        </section>
+      </aside>
+    </main>
+
+    <section id="bottomPanel" class="bottom-panel">
+      <div class="tabs" role="tablist">
+        <button class="tab active" data-tab="eventsTab" type="button">События</button>
+        <button class="tab" data-tab="checksTab" type="button">Проверки</button>
+        <button class="tab" data-tab="diffTab" type="button">Diff/Различия</button>
+        <button class="tab" data-tab="reportTab" type="button">Отчёт</button>
+      </div>
+      <div id="eventsTab" class="tab-content active">
+        <ul id="events" class="event-list">
+          <li class="empty">Событий пока нет.</li>
+        </ul>
+      </div>
+      <div id="checksTab" class="tab-content">
+        <div id="verifier" class="checks">
+          <p class="empty">Проверки ещё не запускались.</p>
+        </div>
+      </div>
+      <div id="diffTab" class="tab-content">
+        <pre id="diff">Изменений пока нет.</pre>
+      </div>
+      <div id="reportTab" class="tab-content">
+        <pre id="report">Итоговый отчёт пока не создан.</pre>
+      </div>
+    </section>
+
+    <script src="/static/app.js"></script>
+  </body>
+</html>

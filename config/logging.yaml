@@ -1,0 +1,7 @@
+level: INFO
+format: jsonl
+log_directory: .agent/logs
+redact_secrets: true
+save_tool_calls: true
+save_raw_outputs: true
+

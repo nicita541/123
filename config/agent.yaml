@@ -1,0 +1,10 @@
+name: Complex AI Coding Agent
+default_mode: review
+max_iterations: 8
+max_replans: 2
+max_changed_files: 10
+require_plan_before_execution: true
+require_final_review: true
+run_tests_after_changes: true
+run_build_after_changes: true
+

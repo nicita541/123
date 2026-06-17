@@ -1,0 +1,23 @@
+forbidden_paths:
+  - .env
+  - .git
+  - id_rsa
+  - id_ed25519
+  - credentials
+  - token
+forbidden_commands:
+  - git push
+  - git reset --hard
+  - git clean
+  - rm -rf
+  - del /s
+  - Remove-Item -Recurse
+secret_patterns:
+  - "api[_-]?key"
+  - "secret"
+  - "token"
+  - "password"
+max_file_size_bytes: 1048576
+max_patch_size_bytes: 262144
+approval_required_for_mutation: true
+

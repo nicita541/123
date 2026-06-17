@@ -1,0 +1,4 @@
+sqlite_path: .agent/runs.sqlite3
+artifact_path: .agent/artifacts
+retention_days: 30
+
