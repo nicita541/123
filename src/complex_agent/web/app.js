@@ -1,4 +1,5 @@
 const state = {
+  currentProjectRoot: "",
   taskId: null,
   sessionId: null,
   status: "idle",
@@ -8,6 +9,7 @@ const state = {
   report: "",
   verificationOutput: "",
   workspace: null,
+  busy: false,
 };
 
 const $ = (id) => document.getElementById(id);
@@ -40,6 +42,16 @@ function toast(message, type = "error") {
   }, 4200);
 }
 
+function setBusy(busy) {
+  state.busy = busy;
+  $("sendBtn").disabled = busy || !$("taskInput").value.trim();
+  document.querySelectorAll(".card-action, .mini-button, .env-actions button").forEach((button) => {
+    if (button.id === "selectProjectBtn" || button.id === "cancelProjectBtn") return;
+    if (button.hasAttribute("data-always-enabled")) return;
+    button.disabled = busy || button.hasAttribute("data-disabled");
+  });
+}
+
 function setStatus(status) {
   state.status = status;
   $("envProgress").textContent = translateStatus(status);
@@ -48,18 +60,25 @@ function setStatus(status) {
 function translateStatus(status) {
   const map = {
     idle: "Нет задачи",
-    planning: "Планирование",
+    planning: "План составляется",
     planned: "План готов",
     proposing_changes: "Предлагаются изменения",
     waiting_approval: "Ожидается подтверждение",
     approved: "Подтверждено",
+    running_to_goal: "Выполнение к цели",
     applying_patch: "Применяется patch",
     verifying: "Проверка",
-    completed: "Готово",
+    completed: "Выполнено",
     failed: "Ошибка",
     rejected: "Отклонено",
+    pending_approval: "Ожидается подтверждение",
   };
   return map[status] || status;
+}
+
+function projectName(path) {
+  const normalized = String(path || "").replaceAll("\\", "/").replace(/\/$/, "");
+  return normalized.split("/").pop() || "проект";
 }
 
 function addHistory(title) {
@@ -80,11 +99,24 @@ function addFeedCard(className, html) {
   return card;
 }
 
+function resetChat() {
+  state.taskId = null;
+  state.sessionId = null;
+  state.status = "idle";
+  state.proposedDiff = "";
+  state.proposedFiles = [];
+  state.pendingApprovals = [];
+  state.report = "";
+  state.verificationOutput = "";
+  $("feed").innerHTML = "";
+  $("emptyState").hidden = false;
+  $("taskInput").value = "";
+  setStatus("idle");
+  setBusy(false);
+}
+
 function renderUserMessage(text) {
-  addFeedCard(
-    "user-card",
-    `<div class="card-label">Вы</div><p>${escapeHtml(text)}</p>`
-  );
+  addFeedCard("user-card", `<div class="card-label">Вы</div><p>${escapeHtml(text)}</p>`);
 }
 
 function renderSystemEvent(text) {
@@ -104,16 +136,24 @@ function renderPlan(data) {
         </li>`
     )
     .join("");
+  const risks = (data.plan.risks || [])
+    .map((risk) => `<li>${escapeHtml(risk)}</li>`)
+    .join("");
   addFeedCard(
     "plan-card",
     `
       <div class="card-label">Агент</div>
       <h3>План выполнения</h3>
       <ol class="plan-list">${steps}</ol>
-      <button id="proposeBtn" class="card-action" type="button">Предложить изменения</button>
+      ${risks ? `<details><summary>Риски</summary><ul>${risks}</ul></details>` : ""}
+      <div class="approval-actions">
+        <button id="proposeBtn" class="card-action" type="button">Предложить изменения</button>
+        <button id="runGoalBtn" class="card-action secondary" type="button">Запустить цель</button>
+      </div>
     `
   );
   $("proposeBtn").onclick = proposeChanges;
+  $("runGoalBtn").onclick = runGoal;
 }
 
 function renderDiffCard(data) {
@@ -124,12 +164,13 @@ function renderDiffCard(data) {
     "diff-card",
     `
       <div class="card-label">Предложены изменения</div>
-      <h3>Proposed diff</h3>
+      <h3>Diff готов к проверке</h3>
       <p>${escapeHtml(data.proposed_summary || "Patch готов к проверке.")}</p>
+      <p class="muted">Изменено ${state.proposedFiles.length} файл(ов)</p>
       <ul class="changed-files">${files}</ul>
       <details>
         <summary>Показать diff</summary>
-        <pre class="diff-code">${renderDiffLines(state.proposedDiff)}</pre>
+        <pre class="diff-code">${escapeHtml(state.proposedDiff || "Изменений пока нет.")}</pre>
       </details>
     `
   );
@@ -156,11 +197,6 @@ function renderApprovalCard(data) {
   $("rejectBtn").onclick = () => reject(approval);
 }
 
-function renderDiffLines(diff) {
-  if (!diff) return "Изменений пока нет.";
-  return escapeHtml(diff);
-}
-
 function renderRunResult(data) {
   const files = (data.proposed_files || data.changed_files || [])
     .map((file) => `<li>${escapeHtml(file)}</li>`)
@@ -169,11 +205,12 @@ function renderRunResult(data) {
   addFeedCard(
     "result-card",
     `
-      <div class="card-label">Готово</div>
+      <div class="card-label">${data.status === "completed" ? "Готово" : "Ошибка"}</div>
       <h3>${data.status === "completed" ? "Задача выполнена" : "Есть ошибка"}</h3>
+      <p>${data.status === "completed" ? "✓ Patch применён · ✓ Проверка прошла" : "Проверьте детали ниже"}</p>
       <h4>Изменённые файлы</h4>
       <ul class="changed-files">${files || "<li>Нет</li>"}</ul>
-      <details open>
+      <details>
         <summary>Логи команд</summary>
         <pre>${escapeHtml(verification)}</pre>
       </details>
@@ -185,10 +222,29 @@ function renderRunResult(data) {
   );
 }
 
+function renderFailure(data) {
+  const detail = (data.events || []).at(-1)?.detail || "Для этой задачи нужна локальная модель Ollama. Сейчас Ollama недоступна.";
+  addFeedCard(
+    "system-card",
+    `
+      <div class="card-label">Не удалось продолжить</div>
+      <p>${escapeHtml(detail)}</p>
+    `
+  );
+}
+
 async function loadStatus() {
-  const [status, workspace] = await Promise.all([api("/api/status"), api("/api/workspace")]);
+  const [project, status, workspace] = await Promise.all([
+    api("/api/project"),
+    api("/api/status"),
+    api("/api/workspace"),
+  ]);
+  state.currentProjectRoot = project.project_root;
   state.workspace = workspace;
-  $("projectPath").textContent = workspace.project_root;
+  $("projectPath").textContent = project.project_root;
+  $("projectInput").value = project.project_root;
+  $("projectName").textContent = projectName(project.project_root);
+  $("envProject").textContent = project.project_root;
   $("envBranch").textContent = workspace.git_branch || "нет ветки";
   $("envChanges").textContent = `${workspace.changed_files.length} файлов`;
   $("envProvider").textContent = status.llm_provider || "deterministic";
@@ -196,17 +252,44 @@ async function loadStatus() {
   $("envModelStatus").textContent = status.ollama_reachable
     ? "Подключено"
     : "Ollama недоступен · deterministic fallback";
-  $("envSources").innerHTML = (workspace.files || [])
-    .slice(0, 4)
-    .map((file) => `<li>${escapeHtml(file.path)}</li>`)
-    .join("") || "<li>Источников пока нет</li>";
+  $("agentSelector").innerHTML = `<option>${escapeHtml(
+    status.ollama_reachable && status.ollama_model
+      ? `Ollama · ${status.ollama_model}`
+      : "Локальный агент"
+  )}</option>`;
+  $("envSources").innerHTML =
+    (workspace.files || [])
+      .slice(0, 4)
+      .map((file) => `<li>${escapeHtml(file.path)}</li>`)
+      .join("") || "<li>Источников пока нет</li>";
+}
+
+async function selectProject(event) {
+  event.preventDefault();
+  const path = $("projectInput").value.trim();
+  if (!path) return;
+  setBusy(true);
+  try {
+    await api("/api/project/select", {
+      method: "POST",
+      body: JSON.stringify({ path }),
+    });
+    $("projectForm").hidden = true;
+    resetChat();
+    await loadStatus();
+    toast("Рабочая папка выбрана", "success");
+  } catch (error) {
+    handleError(error);
+  } finally {
+    setBusy(false);
+  }
 }
 
 async function submitTask(taskOverride = "") {
   const task = taskOverride || $("taskInput").value.trim();
   if (!task) return;
   $("taskInput").value = "";
-  $("sendBtn").disabled = true;
+  setBusy(true);
   setStatus("planning");
   renderUserMessage(task);
   addHistory(task);
@@ -220,28 +303,50 @@ async function submitTask(taskOverride = "") {
     renderPlan(data);
   } catch (error) {
     handleError(error);
+  } finally {
+    setBusy(false);
   }
 }
 
 async function proposeChanges() {
   if (!state.taskId) return;
+  setBusy(true);
   setStatus("proposing_changes");
   try {
     const data = await api(`/api/tasks/${state.taskId}/propose`, { method: "POST" });
     setStatus(data.status);
     if (data.status === "failed") {
-      renderSystemEvent((data.events || []).at(-1)?.detail || "Не удалось предложить изменения.");
+      renderFailure(data);
       return;
     }
     renderDiffCard(data);
     renderApprovalCard(data);
   } catch (error) {
     handleError(error);
+  } finally {
+    setBusy(false);
   }
+}
+
+async function runGoal() {
+  if (!state.taskId) {
+    await submitTask();
+    return;
+  }
+  if (state.status === "planned") {
+    await proposeChanges();
+    return;
+  }
+  if (state.status === "waiting_approval") {
+    renderSystemEvent("Нужно подтвердить предложенный diff перед записью файлов.");
+    return;
+  }
+  await runTask();
 }
 
 async function approve(approval) {
   if (!state.taskId) return;
+  setBusy(true);
   try {
     const data = await api(`/api/tasks/${state.taskId}/approve`, {
       method: "POST",
@@ -252,11 +357,14 @@ async function approve(approval) {
     await runTask();
   } catch (error) {
     handleError(error);
+  } finally {
+    setBusy(false);
   }
 }
 
 async function reject(approval) {
   if (!state.taskId) return;
+  setBusy(true);
   try {
     const data = await api(`/api/tasks/${state.taskId}/reject`, {
       method: "POST",
@@ -266,19 +374,33 @@ async function reject(approval) {
     renderSystemEvent("Изменение отклонено. Файлы не изменены.");
   } catch (error) {
     handleError(error);
+  } finally {
+    setBusy(false);
   }
 }
 
 async function runTask() {
   if (!state.taskId) return;
-  setStatus("applying_patch");
+  setStatus("running_to_goal");
   try {
     const data = await api(`/api/tasks/${state.taskId}/run`, { method: "POST" });
     setStatus(data.status);
+    if (data.pending_approvals && data.pending_approvals.length) {
+      renderApprovalCard(data);
+      return;
+    }
     renderRunResult(data);
     await loadStatus();
   } catch (error) {
     handleError(error);
+  }
+}
+
+function showCurrentDiff() {
+  if (state.proposedDiff) {
+    addFeedCard("diff-card", `<h3>Diff</h3><pre class="diff-code">${escapeHtml(state.proposedDiff)}</pre>`);
+  } else {
+    renderSystemEvent("Diff пока не создан.");
   }
 }
 
@@ -291,7 +413,7 @@ function handleError(error) {
 
 function setupEvents() {
   $("taskInput").addEventListener("input", () => {
-    $("sendBtn").disabled = !$("taskInput").value.trim();
+    $("sendBtn").disabled = state.busy || !$("taskInput").value.trim();
   });
   $("taskInput").addEventListener("keydown", (event) => {
     if (event.key === "Enter" && !event.shiftKey) {
@@ -300,20 +422,24 @@ function setupEvents() {
     }
   });
   $("sendBtn").onclick = () => submitTask();
-  $("newChatBtn").onclick = () => window.location.reload();
+  $("newChatBtn").onclick = resetChat;
   $("refreshBtn").onclick = () => loadStatus().catch(handleError);
   $("envCheckBtn").onclick = () => submitTask("Проведи аудит проекта");
-  $("envDiffBtn").onclick = () => {
-    if (state.proposedDiff) {
-      addFeedCard("diff-card", `<h3>Diff</h3><pre class="diff-code">${renderDiffLines(state.proposedDiff)}</pre>`);
-    } else {
-      renderSystemEvent("Diff пока не создан.");
-    }
+  $("envDiffBtn").onclick = showCurrentDiff;
+  $("chooseProjectBtn").onclick = () => {
+    $("projectForm").hidden = false;
+    $("projectInput").focus();
   };
+  $("projectForm").onsubmit = selectProject;
+  $("cancelProjectBtn").onclick = () => {
+    $("projectForm").hidden = true;
+  };
+  $("settingsBtn").onclick = () => renderSystemEvent("Настройки пока ограничены выбором рабочей папки и режима доступа.");
   document.querySelectorAll(".quick-prompts button").forEach((button) => {
     button.onclick = () => submitTask(button.textContent || "");
   });
 }
 
 setupEvents();
+setStatus("idle");
 loadStatus().catch(handleError);

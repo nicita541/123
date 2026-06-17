@@ -57,6 +57,20 @@ class OllamaProviderTests(unittest.TestCase):
             provider.complete("hello")
         self.assertIn("Ollama is unavailable", str(ctx.exception))
 
+    def test_list_models_uses_tags_endpoint(self) -> None:
+        calls = []
+
+        def fake_urlopen(request, timeout):  # type: ignore[no-untyped-def]
+            calls.append((request, timeout))
+            return _FakeResponse({"models": [{"name": "qwen2.5-coder:7b"}, {"name": "llama3.1:8b"}]})
+
+        provider = OllamaProvider(urlopen=fake_urlopen, timeout_seconds=5)
+        self.assertEqual(provider.list_models(), ["qwen2.5-coder:7b", "llama3.1:8b"])
+        request, timeout = calls[0]
+        self.assertEqual(request.full_url, "http://127.0.0.1:11434/api/tags")
+        self.assertEqual(request.get_method(), "GET")
+        self.assertEqual(timeout, 5)
+
     def test_env_override_config(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             config = Path(temp) / "models.yaml"

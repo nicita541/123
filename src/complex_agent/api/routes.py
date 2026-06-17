@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import sqlite3
 from pathlib import Path
 from typing import Any
@@ -13,6 +14,8 @@ from complex_agent.api.schemas import (
     FilePreviewResponse,
     GitDiffResponse,
     PlanRequest,
+    ProjectResponse,
+    ProjectSelectRequest,
     TimelineResponse,
     WorkspaceResponse,
 )
@@ -45,11 +48,24 @@ def create_router(store: SessionStore) -> APIRouter:
             "ollama_base_url": llm_status["ollama_base_url"],
             "ollama_model": llm_status["ollama_model"],
             "ollama_reachable": llm_status["ollama_reachable"],
+            "ollama_models": llm_status.get("ollama_models", []),
         }
 
     @router.get("/api/tools")
     def tools() -> dict[str, Any]:
         return {"tools": store.runtime.registry.list_tool_info(include_all=True)}
+
+    @router.get("/api/project", response_model=ProjectResponse)
+    def get_project() -> dict[str, Any]:
+        return _project_response(store)
+
+    @router.post("/api/project/select", response_model=ProjectResponse)
+    def select_project(payload: ProjectSelectRequest) -> dict[str, Any]:
+        try:
+            store.select_project(payload.path)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return _project_response(store)
 
     @router.get("/api/workspace", response_model=WorkspaceResponse)
     def workspace() -> dict[str, Any]:
@@ -190,9 +206,9 @@ def create_router(store: SessionStore) -> APIRouter:
         task_session = store.get_task(task_id)
         if task_session is None:
             raise HTTPException(status_code=404, detail="Unknown task.")
-        diff = ""
         if task_session.proposed_patch:
             return {"diff": task_session.proposed_patch}
+        diff = ""
         if task_session.state:
             for observation in task_session.state.observations:
                 if observation.source == "git_diff":
@@ -234,7 +250,16 @@ def _validate_project_path(project_path: str | None, configured_root: Path) -> N
         return
     requested = Path(project_path).expanduser().resolve()
     if requested != configured_root:
-        raise HTTPException(status_code=400, detail="MVP 2 uses the configured project root only.")
+        raise HTTPException(status_code=400, detail="Use /api/project/select before planning in another folder.")
+
+
+def _project_response(store: SessionStore) -> dict[str, Any]:
+    root = store.runtime.project_root
+    return {
+        "project_root": str(root),
+        "exists": root.exists() and root.is_dir(),
+        "writable": root.exists() and root.is_dir() and os.access(root, os.W_OK),
+    }
 
 
 def _tool_context(store: SessionStore) -> ToolContext:
@@ -349,5 +374,11 @@ def _event_title(event_type: str) -> str:
         "step_finished": "Шаг завершён",
         "tool_called": "Инструмент вызван",
         "tool_finished": "Инструмент завершён",
+        "llm_unavailable": "Ollama недоступен",
+        "patch_proposed": "Предложены изменения",
+        "patch_applied": "Patch применён",
+        "patch_failed": "Patch не применён",
+        "verification_finished": "Проверка завершена",
+        "proposal_failed": "Не удалось предложить изменения",
     }
     return titles.get(event_type, event_type)

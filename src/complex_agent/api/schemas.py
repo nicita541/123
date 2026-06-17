@@ -22,6 +22,16 @@ class ApprovalRequestModel(BaseModel):
     action: str
 
 
+class ProjectSelectRequest(BaseModel):
+    path: str
+
+
+class ProjectResponse(BaseModel):
+    project_root: str
+    exists: bool = True
+    writable: bool = True
+
+
 class WorkspaceFile(BaseModel):
     path: str
     name: str

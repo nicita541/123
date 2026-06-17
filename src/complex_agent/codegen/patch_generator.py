@@ -38,8 +38,10 @@ class PatchGenerator:
     def llm_status(self) -> dict[str, object]:
         reachable = False
         error = ""
+        models: list[str] = []
         try:
-            reachable = self.ollama_provider.is_reachable()
+            models = self.ollama_provider.list_models()
+            reachable = True
         except Exception as exc:  # noqa: BLE001 - status must not break read-only calls
             error = str(exc)
         return {
@@ -48,6 +50,7 @@ class PatchGenerator:
             "ollama_base_url": self.settings.base_url,
             "ollama_model": self.settings.model,
             "ollama_reachable": reachable,
+            "ollama_models": models,
             "ollama_error": error,
         }
 

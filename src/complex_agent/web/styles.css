@@ -7,8 +7,8 @@
   --text: #f5f5f5;
   --muted: #a3a3a3;
   --accent: #10a37f;
+  --accent-strong: #36d399;
   --success: #22c55e;
-  --warning: #f59e0b;
   --danger: #ef4444;
   --code-bg: #0b1220;
 }
@@ -17,10 +17,12 @@
   box-sizing: border-box;
 }
 
+html,
 body {
   margin: 0;
-  min-width: 1120px;
-  min-height: 100vh;
+  width: 100%;
+  min-height: 100%;
+  overflow-x: hidden;
   background: var(--body);
   color: var(--text);
   font-family: system-ui, "Segoe UI", Arial, sans-serif;
@@ -28,7 +30,8 @@ body {
 
 button,
 textarea,
-select {
+select,
+input {
   font: inherit;
 }
 
@@ -36,18 +39,27 @@ button {
   border: 0;
 }
 
+h1,
+h2,
+h3,
+h4,
+p {
+  margin: 0;
+}
+
 .sidebar {
   position: fixed;
   left: 0;
   top: 0;
+  z-index: 20;
   width: 260px;
   height: 100vh;
   display: flex;
   flex-direction: column;
-  gap: 18px;
-  padding: 18px 14px;
+  gap: 16px;
+  padding: 16px 12px;
   background: var(--sidebar);
-  border-right: 1px solid var(--border);
+  border-right: 1px solid #262626;
 }
 
 .sidebar-top {
@@ -65,14 +77,6 @@ button {
   color: #052e23;
   background: var(--accent);
   font-weight: 800;
-}
-
-h1,
-h2,
-h3,
-h4,
-p {
-  margin: 0;
 }
 
 h1 {
@@ -105,17 +109,42 @@ h4 {
 
 .sidebar-primary,
 .nav-item,
-.settings-link {
-  width: 100%;
-  padding: 10px 12px;
+.settings-link,
+.mini-button,
+.card-action,
+.env-actions button {
   border-radius: 10px;
   color: var(--text);
   background: #202020;
   cursor: pointer;
-  text-align: left;
+  transition: background 140ms ease, opacity 140ms ease, transform 140ms ease;
+}
+
+.sidebar-primary:hover,
+.nav-item:hover,
+.settings-link:hover,
+.mini-button:hover,
+.card-action:hover,
+.env-actions button:hover {
+  background: #2f2f2f;
+}
+
+button:focus-visible,
+textarea:focus-visible,
+select:focus-visible,
+input:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+button:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
 }
 
 .sidebar-primary {
+  width: 100%;
+  padding: 10px 12px;
   background: var(--accent);
   color: #052e23;
   font-weight: 800;
@@ -127,12 +156,15 @@ h4 {
   gap: 4px;
 }
 
-.nav-item {
+.nav-item,
+.settings-link {
+  width: 100%;
+  padding: 10px 12px;
+  text-align: left;
   background: transparent;
 }
 
-.nav-item.active,
-.nav-item:hover {
+.nav-item.active {
   background: #2a2a2a;
 }
 
@@ -147,9 +179,10 @@ h4 {
   letter-spacing: 0.06em;
 }
 
-.project-card {
+.project-card,
+.project-form {
   display: grid;
-  gap: 4px;
+  gap: 8px;
   padding: 10px;
   border: 1px solid var(--border);
   border-radius: 12px;
@@ -157,9 +190,46 @@ h4 {
 }
 
 .project-card span {
-  overflow-wrap: anywhere;
+  overflow: hidden;
   color: var(--muted);
   font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.project-form label {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.project-form input,
+textarea,
+select {
+  width: 100%;
+  border: 1px solid #3a3a3a;
+  border-radius: 12px;
+  color: var(--text);
+  background: #151515;
+}
+
+.project-form input {
+  padding: 9px 10px;
+}
+
+.mini-button {
+  padding: 8px 10px;
+  font-size: 12px;
+}
+
+.mini-button.primary {
+  color: #052e23;
+  background: var(--accent);
+  font-weight: 800;
+}
+
+.inline-actions {
+  display: flex;
+  gap: 8px;
 }
 
 .history-list,
@@ -179,8 +249,15 @@ h4 {
   display: flex;
   justify-content: space-between;
   gap: 10px;
+  min-width: 0;
   color: var(--muted);
   font-size: 13px;
+}
+
+.history-list span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .settings-link {
@@ -193,11 +270,14 @@ h4 {
   min-height: 100vh;
   display: flex;
   justify-content: center;
+  position: relative;
+  padding-right: 360px;
 }
 
 .task-feed {
-  width: 800px;
-  padding: 34px 0 170px;
+  width: min(820px, calc(100vw - 260px - 380px - 48px));
+  min-width: 620px;
+  padding: 40px 0 170px;
 }
 
 .empty-state {
@@ -209,11 +289,10 @@ h4 {
 
 .empty-state h2 {
   font-size: 30px;
-  color: var(--text);
 }
 
 .empty-state p {
-  max-width: 640px;
+  max-width: 660px;
   margin: 0 auto;
   color: var(--muted);
   line-height: 1.5;
@@ -235,6 +314,10 @@ h4 {
   cursor: pointer;
 }
 
+.quick-prompts button:hover {
+  background: #292929;
+}
+
 .feed {
   display: grid;
   gap: 14px;
@@ -249,6 +332,8 @@ h4 {
 }
 
 .user-card {
+  justify-self: end;
+  max-width: 86%;
   background: #191919;
 }
 
@@ -290,21 +375,21 @@ h4 {
   height: 26px;
   border-radius: 50%;
   background: #2a2a2a;
-  color: var(--accent);
+  color: var(--accent-strong);
   font-weight: 800;
 }
 
 .plan-list small {
+  display: block;
+  margin-top: 3px;
   color: var(--muted);
 }
 
 .card-action {
   margin-top: 16px;
   padding: 10px 14px;
-  border-radius: 12px;
   background: var(--accent);
   color: #052e23;
-  cursor: pointer;
   font-weight: 800;
 }
 
@@ -315,6 +400,7 @@ h4 {
 
 .approval-actions {
   display: flex;
+  flex-wrap: wrap;
   gap: 10px;
 }
 
@@ -324,11 +410,12 @@ details {
 
 summary {
   cursor: pointer;
-  color: var(--accent);
+  color: var(--accent-strong);
 }
 
 pre,
 .diff-code {
+  max-height: 360px;
   margin: 10px 0 0;
   padding: 12px;
   overflow: auto;
@@ -351,9 +438,12 @@ pre,
   position: fixed;
   right: 28px;
   top: 80px;
+  z-index: 15;
   width: 300px;
+  max-height: calc(100vh - 120px);
   display: grid;
   gap: 16px;
+  overflow: auto;
   padding: 18px;
   border: 1px solid var(--border);
   border-radius: 18px;
@@ -369,16 +459,8 @@ pre,
 
 .env-header button,
 .env-actions button {
-  border-radius: 10px;
   padding: 8px 10px;
-  color: var(--text);
   background: #333;
-  cursor: pointer;
-}
-
-.env-actions button:disabled {
-  opacity: 0.45;
-  cursor: not-allowed;
 }
 
 .env-list {
@@ -400,9 +482,11 @@ pre,
 
 .env-list dd {
   margin: 0;
-  max-width: 170px;
-  overflow-wrap: anywhere;
+  max-width: 174px;
+  overflow: hidden;
   text-align: right;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .ok {
@@ -416,8 +500,11 @@ pre,
 
 .env-block p,
 .env-block li {
+  overflow: hidden;
   color: var(--muted);
   font-size: 13px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .env-block ul {
@@ -433,30 +520,34 @@ pre,
 
 .composer {
   position: fixed;
-  left: 260px;
-  right: 0;
   bottom: 24px;
-  display: flex;
-  justify-content: center;
-  pointer-events: none;
+  left: calc(260px + ((100vw - 260px - 360px - 820px) / 2));
+  z-index: 30;
+  width: 820px;
+  max-width: calc(100vw - 260px - 380px - 48px);
+  min-height: 96px;
+  padding: 14px 16px;
+  border: 1px solid #363636;
+  border-radius: 20px;
+  background: #2a2a2a;
+  box-shadow: 0 18px 50px rgba(0, 0, 0, 0.45);
 }
 
 .composer-inner {
-  width: 800px;
   display: grid;
-  grid-template-columns: auto 160px 1fr 150px auto;
+  gap: 10px;
+}
+
+.composer-row {
+  display: grid;
+  grid-template-columns: auto 180px 1fr auto auto;
   gap: 8px;
-  align-items: end;
-  padding: 10px;
-  border: 1px solid var(--border);
-  border-radius: 22px;
-  background: #202020;
-  box-shadow: 0 22px 60px rgba(0, 0, 0, 0.45);
-  pointer-events: auto;
+  align-items: center;
 }
 
 .plus-button,
-.send-button {
+.send-button,
+.mic-button {
   width: 38px;
   height: 38px;
   border-radius: 50%;
@@ -464,7 +555,8 @@ pre,
   font-weight: 900;
 }
 
-.plus-button {
+.plus-button,
+.mic-button {
   color: var(--text);
   background: #333;
 }
@@ -474,21 +566,8 @@ pre,
   background: var(--accent);
 }
 
-.send-button:disabled {
-  opacity: 0.45;
-  cursor: not-allowed;
-}
-
-textarea,
-select {
-  border: 1px solid #3a3a3a;
-  border-radius: 12px;
-  color: var(--text);
-  background: #151515;
-}
-
 textarea {
-  min-height: 42px;
+  min-height: 48px;
   max-height: 160px;
   resize: vertical;
   padding: 11px 12px;
@@ -496,6 +575,7 @@ textarea {
 }
 
 select {
+  min-width: 0;
   padding: 10px;
 }
 
@@ -515,12 +595,45 @@ select {
   background: var(--success);
 }
 
-@media (max-width: 1280px) {
-  body {
-    min-width: 0;
+@media (max-width: 1366px) {
+  .main {
+    padding-right: 280px;
+  }
+
+  .task-feed {
+    width: min(720px, calc(100vw - 260px - 300px - 32px));
+    min-width: 500px;
   }
 
   .environment-card {
+    right: 14px;
+    width: 250px;
+  }
+
+  .composer {
+    left: 284px;
+    width: calc(100vw - 284px - 284px);
+    max-width: none;
+  }
+}
+
+@media (max-width: 1120px) {
+  .environment-card {
     display: none;
+  }
+
+  .main {
+    padding-right: 24px;
+  }
+
+  .task-feed {
+    width: min(720px, calc(100vw - 260px - 48px));
+    min-width: 0;
+  }
+
+  .composer {
+    left: 284px;
+    right: 24px;
+    width: auto;
   }
 }

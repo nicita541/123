@@ -43,7 +43,7 @@ class OllamaProvider(Provider):
         self.base_url = base_url.rstrip("/")
         self.model = model
         self.timeout_seconds = timeout_seconds
-        self._urlopen = urlopen or urllib.request.urlopen
+        self._urlopen = urlopen or urllib.request.build_opener(urllib.request.ProxyHandler({})).open
 
     @classmethod
     def from_settings(cls, settings: OllamaSettings, *, urlopen: Callable[..., Any] | None = None) -> "OllamaProvider":
@@ -75,10 +75,26 @@ class OllamaProvider(Provider):
 
     def is_reachable(self) -> bool:
         try:
-            self.complete("Return the word ok.")
+            self.list_models()
         except OllamaError:
             return False
         return True
+
+    def list_models(self) -> list[str]:
+        data = self._get_json("/api/tags")
+        models = data.get("models", [])
+        if not isinstance(models, list):
+            return []
+        names: list[str] = []
+        for item in models:
+            if isinstance(item, dict) and isinstance(item.get("name"), str):
+                names.append(item["name"])
+        return names
+
+    def _get_json(self, path: str) -> dict[str, Any]:
+        url = f"{self.base_url}{path}"
+        request = urllib.request.Request(url, headers={"Accept": "application/json"}, method="GET")
+        return self._send(request)
 
     def _post_json(self, path: str, payload: dict[str, Any]) -> dict[str, Any]:
         url = f"{self.base_url}{path}"
@@ -89,6 +105,9 @@ class OllamaProvider(Provider):
             headers={"Content-Type": "application/json"},
             method="POST",
         )
+        return self._send(request)
+
+    def _send(self, request: urllib.request.Request) -> dict[str, Any]:
         try:
             with self._urlopen(request, timeout=self.timeout_seconds) as response:
                 raw = response.read().decode("utf-8", errors="replace")

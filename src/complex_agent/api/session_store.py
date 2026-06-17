@@ -51,6 +51,16 @@ class SessionStore:
         self.chat_sessions: dict[str, ChatSession] = {}
         self.task_sessions: dict[str, TaskSession] = {}
 
+    def select_project(self, project_path: str | Path) -> Path:
+        resolved = Path(project_path).expanduser().resolve()
+        if not resolved.exists() or not resolved.is_dir():
+            raise ValueError(f"Project folder does not exist: {resolved}")
+        self.runtime = AgentRuntime(project_path=resolved)
+        self.patch_generator = PatchGenerator(self.runtime.safety)
+        self.chat_sessions.clear()
+        self.task_sessions.clear()
+        return resolved
+
     def get_or_create_chat(self, session_id: str | None = None) -> ChatSession:
         if session_id and session_id in self.chat_sessions:
             return self.chat_sessions[session_id]

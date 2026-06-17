@@ -28,7 +28,7 @@ class WebTests(unittest.TestCase):
             self.assertIn("Локальный агент", index.text)
             self.assertIn("Что изменить в проекте?", index.text)
             self.assertIn("Среда", index.text)
-            self.assertIn("Запросите внесение изменений", index.text)
+            self.assertIn("Запросите внесение дополнительных изменений", index.text)
 
     def test_index_contains_final_russian_interface_labels(self) -> None:
         text = Path("src/complex_agent/web/index.html").read_text(encoding="utf-8")
@@ -36,6 +36,7 @@ class WebTests(unittest.TestCase):
             "Локальный агент",
             "Новый чат",
             "Проекты",
+            "Выбрать папку",
             "История",
             "Что изменить в проекте?",
             "Среда",
@@ -43,13 +44,23 @@ class WebTests(unittest.TestCase):
             "Модель",
             "Provider",
             "Статус модели",
-            "Запросите внесение изменений",
+            "Только план",
+            "С подтверждением",
+            "Полный доступ",
+            "Запросите внесение дополнительных изменений",
         ]
         for label in labels:
             with self.subTest(label=label):
                 self.assertIn(label, text)
         self.assertNotIn("Codex", text)
         self.assertNotIn("OpenAI", text)
+        self.assertNotIn("Р›", text)
+
+    def test_no_permanent_bottom_panel_or_file_explorer_markup(self) -> None:
+        text = Path("src/complex_agent/web/index.html").read_text(encoding="utf-8")
+        self.assertNotIn("workbench", text.lower())
+        self.assertNotIn("file-tree", text.lower())
+        self.assertNotIn("terminal-panel", text.lower())
 
     def test_styles_contain_final_workspace_layout_classes(self) -> None:
         styles = Path("src/complex_agent/web/styles.css").read_text(encoding="utf-8")
@@ -59,13 +70,15 @@ class WebTests(unittest.TestCase):
             ".task-feed",
             ".environment-card",
             ".composer",
+            ".composer-row",
             ".feed-card",
             ".diff-code",
+            "@media (max-width: 1366px)",
         ]:
             with self.subTest(class_name=class_name):
                 self.assertIn(class_name, styles)
 
-    def test_frontend_has_no_direct_dangerous_endpoints(self) -> None:
+    def test_frontend_has_project_and_goal_handlers_without_dangerous_endpoints(self) -> None:
         script = Path("src/complex_agent/web/app.js").read_text(encoding="utf-8")
         forbidden_fragments = [
             "/api/shell",
@@ -79,5 +92,10 @@ class WebTests(unittest.TestCase):
                 self.assertNotIn(fragment, script)
         self.assertIn("/api/status", script)
         self.assertIn("/api/workspace", script)
+        self.assertIn("/api/project", script)
+        self.assertIn("/api/project/select", script)
         self.assertIn("/api/tasks/plan", script)
         self.assertIn("/api/tasks/${state.taskId}/propose", script)
+        self.assertIn("/api/tasks/${state.taskId}/approve", script)
+        self.assertIn("/api/tasks/${state.taskId}/reject", script)
+        self.assertIn("function runGoal", script)

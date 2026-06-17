@@ -9,6 +9,10 @@ from fastapi.testclient import TestClient
 
 from complex_agent.api.server import create_app
 from complex_agent.planning.plan_step import PlanStep
+from complex_agent.tools.base_tool import ToolContext
+
+
+CALCULATOR_TASK = "Сделай консольный калькулятор на Python"
 
 
 class ApiTests(unittest.TestCase):
@@ -28,7 +32,27 @@ class ApiTests(unittest.TestCase):
             self.assertIn("llm_provider", data)
             self.assertIn("ollama_model", data)
             self.assertIn("ollama_reachable", data)
+            self.assertIn("ollama_models", data)
             self.assertFalse(Path(temp, ".agent").exists())
+
+    def test_status_returns_mocked_ollama_models(self) -> None:
+        class FakePatchGenerator:
+            def llm_status(self) -> dict[str, object]:
+                return {
+                    "llm_provider": "ollama",
+                    "ollama_base_url": "http://127.0.0.1:11434",
+                    "ollama_model": "qwen2.5-coder:7b",
+                    "ollama_reachable": True,
+                    "ollama_models": ["qwen2.5-coder:7b", "llama3.1:8b"],
+                }
+
+        with tempfile.TemporaryDirectory() as temp:
+            app = create_app(project_path=temp)
+            app.state.session_store.patch_generator = FakePatchGenerator()
+            client = TestClient(app)
+            data = client.get("/api/status").json()
+            self.assertTrue(data["ollama_reachable"])
+            self.assertEqual(data["ollama_models"], ["qwen2.5-coder:7b", "llama3.1:8b"])
 
     def test_tools_returns_tool_statuses(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
@@ -39,6 +63,42 @@ class ApiTests(unittest.TestCase):
             self.assertEqual(statuses["git_commit"], "disabled")
             self.assertEqual(statuses["final_report"], "internal")
             self.assertEqual(statuses["read_file"], "enabled")
+
+    def test_project_endpoint_returns_current_root(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp).resolve()
+            client = TestClient(create_app(project_path=root))
+            response = client.get("/api/project")
+            self.assertEqual(response.status_code, 200)
+            self.assertEqual(response.json()["project_root"], str(root))
+            self.assertFalse((root / ".agent").exists())
+
+    def test_project_select_valid_path_changes_root_without_agent_state(self) -> None:
+        with tempfile.TemporaryDirectory() as first, tempfile.TemporaryDirectory() as second:
+            root1 = Path(first).resolve()
+            root2 = Path(second).resolve()
+            (root2 / "src").mkdir()
+            (root2 / "src" / "app.py").write_text("print('selected')\n", encoding="utf-8")
+            client = TestClient(create_app(project_path=root1))
+            response = client.post("/api/project/select", json={"path": str(root2)})
+            self.assertEqual(response.status_code, 200)
+            self.assertEqual(response.json()["project_root"], str(root2))
+            self.assertFalse((root1 / ".agent").exists())
+            self.assertFalse((root2 / ".agent").exists())
+            workspace = client.get("/api/workspace").json()
+            self.assertEqual(workspace["project_root"], str(root2))
+            self.assertIn("src", workspace["important_directories"])
+            files = client.get("/api/files").text
+            self.assertIn("src/app.py", files)
+
+    def test_project_select_invalid_path_returns_error_and_keeps_root(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp).resolve()
+            missing = root / "missing"
+            client = TestClient(create_app(project_path=root))
+            response = client.post("/api/project/select", json={"path": str(missing)})
+            self.assertEqual(response.status_code, 400)
+            self.assertEqual(client.get("/api/project").json()["project_root"], str(root))
 
     def test_plan_returns_plan_without_mutating_files_or_artifacts(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
@@ -132,6 +192,31 @@ class ApiTests(unittest.TestCase):
             self.assertEqual(blocked.status_code, 403)
             self.assertNotIn("abc123", blocked.text)
 
+    def test_preview_outside_selected_root_is_blocked(self) -> None:
+        with tempfile.TemporaryDirectory() as root_temp, tempfile.TemporaryDirectory() as outside_temp:
+            root = Path(root_temp)
+            outside = Path(outside_temp) / "secret.txt"
+            outside.write_text("outside\n", encoding="utf-8")
+            client = TestClient(create_app(project_path=root))
+            response = client.get("/api/files/preview", params={"path": str(outside)})
+            self.assertEqual(response.status_code, 403)
+            self.assertNotIn("outside", response.text)
+
+    def test_apply_patch_outside_selected_root_is_blocked(self) -> None:
+        with tempfile.TemporaryDirectory() as root_temp, tempfile.TemporaryDirectory() as outside_temp:
+            root = Path(root_temp)
+            outside = Path(outside_temp) / "outside.txt"
+            app = create_app(project_path=root)
+            store = app.state.session_store
+            patch_text = f"--- /dev/null\n+++ {outside}\n@@ -0,0 +1 @@\n+bad\n"
+            result = store.runtime.registry.run(
+                "apply_patch",
+                {"patch": patch_text},
+                ToolContext(project_root=store.runtime.project_root, safety=store.runtime.safety),
+            )
+            self.assertFalse(result.success)
+            self.assertFalse(outside.exists())
+
     def test_git_diff_endpoint_is_safe_outside_git_repo(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             client = TestClient(create_app(project_path=temp))
@@ -159,7 +244,7 @@ class ApiTests(unittest.TestCase):
             client = TestClient(create_app(project_path=root))
             plan = client.post(
                 "/api/tasks/plan",
-                json={"task": "Сделай консольный калькулятор на Python", "mode": "review"},
+                json={"task": CALCULATOR_TASK, "mode": "review"},
             )
             self.assertEqual(plan.status_code, 200)
             task_id = plan.json()["task_id"]
@@ -178,7 +263,7 @@ class ApiTests(unittest.TestCase):
             client = TestClient(create_app(project_path=root))
             task_id = client.post(
                 "/api/tasks/plan",
-                json={"task": "Сделай калькулятор на Python", "mode": "review"},
+                json={"task": CALCULATOR_TASK, "mode": "review"},
             ).json()["task_id"]
             client.post(f"/api/tasks/{task_id}/propose")
             run = client.post(f"/api/tasks/{task_id}/run")
@@ -192,7 +277,7 @@ class ApiTests(unittest.TestCase):
             client = TestClient(create_app(project_path=root))
             task_id = client.post(
                 "/api/tasks/plan",
-                json={"task": "Сделай калькулятор на Python", "mode": "review"},
+                json={"task": CALCULATOR_TASK, "mode": "review"},
             ).json()["task_id"]
             proposed = client.post(f"/api/tasks/{task_id}/propose").json()
             approval = proposed["pending_approvals"][0]
