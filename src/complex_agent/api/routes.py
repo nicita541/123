@@ -34,12 +34,17 @@ def create_router(store: SessionStore) -> APIRouter:
 
     @router.get("/api/status")
     def status() -> dict[str, Any]:
+        llm_status = store.patch_generator.llm_status()
         return {
             "project_root": str(store.runtime.project_root),
             "mode": "review",
             "tool_count": len(store.runtime.registry.list_tools()),
             "agent_state_exists": (store.runtime.project_root / ".agent").exists(),
             "latest_run": _latest_run_summary(store.runtime.project_root),
+            "llm_provider": llm_status["llm_provider"],
+            "ollama_base_url": llm_status["ollama_base_url"],
+            "ollama_model": llm_status["ollama_model"],
+            "ollama_reachable": llm_status["ollama_reachable"],
         }
 
     @router.get("/api/tools")
@@ -95,6 +100,13 @@ def create_router(store: SessionStore) -> APIRouter:
     def plan(payload: PlanRequest) -> dict[str, Any]:
         _validate_project_path(payload.project_path, store.runtime.project_root)
         task_session = store.create_plan(payload.task, mode=parse_mode(payload.mode))
+        return serialize_task_session(task_session)
+
+    @router.post("/api/tasks/{task_id}/propose")
+    def propose(task_id: str) -> dict[str, Any]:
+        task_session = store.propose(task_id)
+        if task_session is None:
+            raise HTTPException(status_code=404, detail="Unknown task.")
         return serialize_task_session(task_session)
 
     @router.post("/api/tasks/{task_id}/run")
@@ -169,6 +181,8 @@ def create_router(store: SessionStore) -> APIRouter:
         task_session = store.get_task(task_id)
         if task_session is None:
             raise HTTPException(status_code=404, detail="Unknown task.")
+        if task_session.final_report_text:
+            return {"report": task_session.final_report_text, "report_path": task_session.report_path}
         return {"report": read_report(task_session.report_path), "report_path": task_session.report_path}
 
     @router.get("/api/tasks/{task_id}/diff")
@@ -177,6 +191,8 @@ def create_router(store: SessionStore) -> APIRouter:
         if task_session is None:
             raise HTTPException(status_code=404, detail="Unknown task.")
         diff = ""
+        if task_session.proposed_patch:
+            return {"diff": task_session.proposed_patch}
         if task_session.state:
             for observation in task_session.state.observations:
                 if observation.source == "git_diff":

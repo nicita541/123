@@ -4,6 +4,7 @@ import argparse
 from pathlib import Path
 
 from complex_agent.app import AgentRuntime
+from complex_agent.codegen.patch_generator import PatchGenerator
 from complex_agent.core.modes import AgentMode
 from complex_agent.ui.console_renderer import ConsoleRenderer
 
@@ -74,8 +75,13 @@ def main(argv: list[str] | None = None) -> int:
             print(f"{tool['status']}\t{tool['name']}\t{tool['description']}")
         return 0
     if args.command == "status":
+        llm_status = PatchGenerator(runtime.safety).llm_status()
         print(f"project: {runtime.project_root}")
         print(f"tools: {len(runtime.registry.list_tools())}")
+        print(f"LLM provider: {llm_status['llm_provider']}")
+        print(f"Ollama base URL: {llm_status['ollama_base_url']}")
+        print(f"Ollama model: {llm_status['ollama_model']}")
+        print(f"Ollama reachable: {'yes' if llm_status['ollama_reachable'] else 'no'}")
         return 0
     if args.command == "history":
         for row in runtime.run_store.list_runs():

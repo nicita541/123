@@ -82,6 +82,54 @@ Workflow:
 
 See `docs/mvp3_codex_like_workspace.md` for added endpoints and MVP 3 safety limits.
 
+## Final Local Coding Agent MVP
+
+The final MVP keeps the local FastAPI/static UI shape and adds an end-to-end safe edit flow:
+
+```text
+task -> plan -> proposed diff -> approval -> ApplyPatchTool -> self-test -> final report
+```
+
+The calculator demo is deterministic and works without an LLM. For a task such as
+`Сделай консольный калькулятор на Python`, the agent proposes a `calculator.py` diff,
+waits for approval, applies the patch through `ApplyPatchTool`, runs
+`python calculator.py --self-test`, and stores a final report.
+
+Unknown tasks may use a local Ollama model to generate a structured plan or proposed
+unified diff. Ollama never writes files directly: every patch is validated by the
+patch generator, file/secrets safety checks, and the approval flow before
+`ApplyPatchTool` can apply it.
+
+See `docs/final_local_coding_agent_mvp.md` for the full workflow and limits.
+
+## Local Ollama Models
+
+Ollama is optional. If it is unavailable, deterministic skills keep working and unknown
+LLM-backed tasks return a clear fallback message instead of mutating the project.
+
+Install and pull a local coding model:
+
+```powershell
+ollama pull qwen2.5-coder:7b
+set OLLAMA_MODEL=qwen2.5-coder:7b
+```
+
+Optional overrides:
+
+```powershell
+set OLLAMA_BASE_URL=http://127.0.0.1:11434
+set OLLAMA_MODEL=qwen2.5-coder:7b
+```
+
+Run the agent:
+
+```powershell
+.venv\Scripts\python.exe -m complex_agent.main serve --project . --host 127.0.0.1 --port 8765
+.venv\Scripts\python.exe -m complex_agent.main --project . status
+```
+
+`status` and `/api/status` show provider, model, base URL, and whether Ollama is reachable.
+
 ## Development
 
 ```powershell

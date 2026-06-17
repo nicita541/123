@@ -3,6 +3,7 @@ from __future__ import annotations
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from fastapi.testclient import TestClient
 
@@ -23,6 +24,10 @@ class ApiTests(unittest.TestCase):
             client = TestClient(create_app(project_path=temp))
             response = client.get("/api/status")
             self.assertEqual(response.status_code, 200)
+            data = response.json()
+            self.assertIn("llm_provider", data)
+            self.assertIn("ollama_model", data)
+            self.assertIn("ollama_reachable", data)
             self.assertFalse(Path(temp, ".agent").exists())
 
     def test_tools_returns_tool_statuses(self) -> None:
@@ -147,6 +152,78 @@ class ApiTests(unittest.TestCase):
             self.assertEqual(data["task_id"], task_id)
             self.assertTrue(data["events"])
             self.assertEqual(client.get("/api/tasks/missing/timeline").status_code, 404)
+
+    def test_calculator_workflow_propose_does_not_create_file(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            client = TestClient(create_app(project_path=root))
+            plan = client.post(
+                "/api/tasks/plan",
+                json={"task": "Сделай консольный калькулятор на Python", "mode": "review"},
+            )
+            self.assertEqual(plan.status_code, 200)
+            task_id = plan.json()["task_id"]
+            propose = client.post(f"/api/tasks/{task_id}/propose")
+            self.assertEqual(propose.status_code, 200)
+            data = propose.json()
+            self.assertEqual(data["status"], "waiting_approval")
+            self.assertIn("calculator.py", data["proposed_files"])
+            self.assertIn("+++ b/calculator.py", data["proposed_diff"])
+            self.assertTrue(data["pending_approvals"])
+            self.assertFalse((root / "calculator.py").exists())
+
+    def test_run_without_approve_does_not_create_calculator(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            client = TestClient(create_app(project_path=root))
+            task_id = client.post(
+                "/api/tasks/plan",
+                json={"task": "Сделай калькулятор на Python", "mode": "review"},
+            ).json()["task_id"]
+            client.post(f"/api/tasks/{task_id}/propose")
+            run = client.post(f"/api/tasks/{task_id}/run")
+            self.assertEqual(run.status_code, 200)
+            self.assertEqual(run.json()["status"], "waiting_approval")
+            self.assertFalse((root / "calculator.py").exists())
+
+    def test_approve_and_run_creates_calculator_and_report(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            client = TestClient(create_app(project_path=root))
+            task_id = client.post(
+                "/api/tasks/plan",
+                json={"task": "Сделай калькулятор на Python", "mode": "review"},
+            ).json()["task_id"]
+            proposed = client.post(f"/api/tasks/{task_id}/propose").json()
+            approval = proposed["pending_approvals"][0]
+            approve = client.post(
+                f"/api/tasks/{task_id}/approve",
+                json={"step_id": approval["step_id"], "action": approval["action"]},
+            )
+            self.assertEqual(approve.status_code, 200)
+            run = client.post(f"/api/tasks/{task_id}/run")
+            self.assertEqual(run.status_code, 200)
+            data = run.json()
+            self.assertEqual(data["status"], "completed")
+            self.assertTrue((root / "calculator.py").exists())
+            self.assertIn("OK: all calculator self-tests passed", data["verification_output"])
+            self.assertIn("python calculator.py --self-test", data["final_report"])
+            report = client.get(f"/api/tasks/{task_id}/report")
+            self.assertIn("Как запустить", report.json()["report"])
+
+    def test_unknown_task_with_ollama_unavailable_does_not_create_files(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            with patch.dict("os.environ", {"OLLAMA_BASE_URL": "http://127.0.0.1:1"}):
+                client = TestClient(create_app(project_path=root))
+            task_id = client.post(
+                "/api/tasks/plan",
+                json={"task": "Сделай неизвестную новую функцию", "mode": "review"},
+            ).json()["task_id"]
+            proposed = client.post(f"/api/tasks/{task_id}/propose")
+            self.assertEqual(proposed.status_code, 200)
+            self.assertEqual(proposed.json()["status"], "failed")
+            self.assertEqual(list(root.iterdir()), [])
 
     def test_approval_endpoint_requires_known_task_action(self) -> None:
         with tempfile.TemporaryDirectory() as temp:

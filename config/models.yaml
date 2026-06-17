@@ -6,4 +6,10 @@ debugger_model: mock
 temperature: 0.1
 max_tokens: 4000
 retry_count: 2
-
+llm:
+  provider: ollama
+  fallback_provider: deterministic
+  ollama:
+    base_url: "http://127.0.0.1:11434"
+    model: "qwen2.5-coder:7b"
+    timeout_seconds: 60

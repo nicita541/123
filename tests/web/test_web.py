@@ -25,41 +25,42 @@ class WebTests(unittest.TestCase):
             self.assertEqual(index.status_code, 200)
             self.assertEqual(script.status_code, 200)
             self.assertEqual(styles.status_code, 200)
-            self.assertIn("Локальный coding-агент", index.text)
-            self.assertIn("Рабочая область", index.text)
-            self.assertIn("Ожидают подтверждения", index.text)
-            self.assertIn("Терминал", index.text)
+            self.assertIn("Локальный агент", index.text)
+            self.assertIn("Что изменить в проекте?", index.text)
+            self.assertIn("Среда", index.text)
+            self.assertIn("Запросите внесение изменений", index.text)
 
-    def test_index_contains_russian_interface_labels(self) -> None:
+    def test_index_contains_final_russian_interface_labels(self) -> None:
         text = Path("src/complex_agent/web/index.html").read_text(encoding="utf-8")
         labels = [
-            "Рабочая область",
-            "Файлы",
+            "Локальный агент",
+            "Новый чат",
+            "Проекты",
+            "История",
+            "Что изменить в проекте?",
+            "Среда",
             "Изменения",
-            "Чат",
-            "План",
-            "Подтверждение",
-            "Терминал",
-            "Проверки",
-            "Журнал",
-            "Отчёт",
+            "Модель",
+            "Provider",
+            "Статус модели",
+            "Запросите внесение изменений",
         ]
         for label in labels:
             with self.subTest(label=label):
                 self.assertIn(label, text)
         self.assertNotIn("Codex", text)
+        self.assertNotIn("OpenAI", text)
 
-    def test_styles_contain_workspace_layout_classes(self) -> None:
+    def test_styles_contain_final_workspace_layout_classes(self) -> None:
         styles = Path("src/complex_agent/web/styles.css").read_text(encoding="utf-8")
         for class_name in [
-            ".workspace-header",
-            ".workspace-grid",
-            ".sidebar-panel",
-            ".chat-workspace",
-            ".action-panel",
-            ".workbench",
-            ".diff-line.added",
-            ".diff-line.deleted",
+            ".sidebar",
+            ".main",
+            ".task-feed",
+            ".environment-card",
+            ".composer",
+            ".feed-card",
+            ".diff-code",
         ]:
             with self.subTest(class_name=class_name):
                 self.assertIn(class_name, styles)
@@ -76,6 +77,7 @@ class WebTests(unittest.TestCase):
         for fragment in forbidden_fragments:
             with self.subTest(fragment=fragment):
                 self.assertNotIn(fragment, script)
-        self.assertIn("/api/files", script)
-        self.assertIn("/api/files/preview", script)
-        self.assertIn("/api/git/diff", script)
+        self.assertIn("/api/status", script)
+        self.assertIn("/api/workspace", script)
+        self.assertIn("/api/tasks/plan", script)
+        self.assertIn("/api/tasks/${state.taskId}/propose", script)

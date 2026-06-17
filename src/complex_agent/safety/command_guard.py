@@ -19,6 +19,7 @@ class CommandGuard:
         "git log",
         "rg",
         "pytest",
+        "python calculator.py --self-test",
         "python -m pytest",
         "ruff check",
         "mypy",
