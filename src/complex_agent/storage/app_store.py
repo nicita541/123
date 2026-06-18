@@ -60,6 +60,9 @@ class AppStore:
                     id TEXT PRIMARY KEY,
                     name TEXT NOT NULL,
                     root_path TEXT NOT NULL UNIQUE,
+                    mount_id TEXT,
+                    host_path TEXT,
+                    container_path TEXT,
                     created_at TEXT NOT NULL,
                     updated_at TEXT NOT NULL,
                     last_opened_at TEXT NOT NULL,
@@ -157,6 +160,23 @@ class AppStore:
                 );
                 """
             )
+            project_columns = {
+                str(row[1]) for row in connection.execute("PRAGMA table_info(projects)").fetchall()
+            }
+            for name in ("mount_id", "host_path", "container_path"):
+                if name not in project_columns:
+                    connection.execute(f"ALTER TABLE projects ADD COLUMN {name} TEXT")
+            connection.execute(
+                "UPDATE projects SET container_path=root_path WHERE container_path IS NULL"
+            )
+            connection.execute(
+                "CREATE UNIQUE INDEX IF NOT EXISTS idx_projects_mount_id "
+                "ON projects(mount_id) WHERE mount_id IS NOT NULL"
+            )
+            connection.execute(
+                "CREATE UNIQUE INDEX IF NOT EXISTS idx_projects_container_path "
+                "ON projects(container_path) WHERE container_path IS NOT NULL"
+            )
             now = utc_now()
             connection.execute(
                 "INSERT OR IGNORE INTO local_users(id, role, created_at) VALUES (?, ?, ?)",
@@ -165,6 +185,10 @@ class AppStore:
             connection.execute(
                 "INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES (?, ?)",
                 (1, now),
+            )
+            connection.execute(
+                "INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES (?, ?)",
+                (2, now),
             )
             connection.commit()
         finally:
@@ -192,16 +216,34 @@ class AppStore:
         name: str | None = None,
         default_model: str | None = None,
         default_mode: str = "review",
+        mount_id: str | None = None,
+        host_path: str | None = None,
+        container_path: str | Path | None = None,
     ) -> dict[str, Any]:
         root = str(Path(root_path).expanduser().resolve())
+        container = str(Path(container_path or root).expanduser().resolve())
+        if container != root:
+            raise ValueError("Project root and container path must identify the same directory.")
         now = utc_now()
         existing = self.get_project_by_root(root)
         if existing:
             with self.transaction() as connection:
                 connection.execute(
                     """UPDATE projects SET name=?, updated_at=?, last_opened_at=?, is_archived=0,
-                       default_model=COALESCE(?, default_model), default_mode=? WHERE id=?""",
-                    (name or existing["name"], now, now, default_model, default_mode, existing["id"]),
+                       default_model=COALESCE(?, default_model), default_mode=?,
+                       mount_id=COALESCE(?, mount_id), host_path=COALESCE(?, host_path),
+                       container_path=? WHERE id=?""",
+                    (
+                        name or existing["name"],
+                        now,
+                        now,
+                        default_model,
+                        default_mode,
+                        mount_id,
+                        host_path,
+                        container,
+                        existing["id"],
+                    ),
                 )
             return self.get_project(str(existing["id"])) or existing
         project_id = new_id("project")
@@ -209,9 +251,21 @@ class AppStore:
             connection.execute(
                 """INSERT INTO projects(
                     id, name, root_path, created_at, updated_at, last_opened_at,
-                    default_model, default_mode
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
-                (project_id, name or Path(root).name or root, root, now, now, now, default_model, default_mode),
+                    default_model, default_mode, mount_id, host_path, container_path
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (
+                    project_id,
+                    name or Path(root).name or root,
+                    root,
+                    now,
+                    now,
+                    now,
+                    default_model,
+                    default_mode,
+                    mount_id,
+                    host_path,
+                    container,
+                ),
             )
         return self.get_project(project_id) or {}
 
@@ -222,7 +276,12 @@ class AppStore:
         root = str(Path(root_path).expanduser().resolve())
         return self._one("SELECT * FROM projects WHERE root_path=?", (root,))
 
-    def list_projects(self, *, include_archived: bool = False, search: str = "") -> list[dict[str, Any]]:
+    def get_project_by_mount_id(self, mount_id: str) -> dict[str, Any] | None:
+        return self._one("SELECT * FROM projects WHERE mount_id=?", (mount_id,))
+
+    def list_projects(
+        self, *, include_archived: bool = False, search: str = ""
+    ) -> list[dict[str, Any]]:
         clauses = ["1=1"]
         params: list[object] = []
         if not include_archived:
@@ -235,7 +294,7 @@ class AppStore:
             f"""SELECT p.*,
                 (SELECT title FROM tasks t WHERE t.project_id=p.id ORDER BY t.updated_at DESC LIMIT 1)
                 AS last_task_title
-                FROM projects p WHERE {' AND '.join(clauses)}
+                FROM projects p WHERE {" AND ".join(clauses)}
                 ORDER BY p.last_opened_at DESC""",
             params,
         )
@@ -258,7 +317,8 @@ class AppStore:
     def archive_project(self, project_id: str) -> bool:
         with self.transaction() as connection:
             cursor = connection.execute(
-                "UPDATE projects SET is_archived=1, updated_at=? WHERE id=?", (utc_now(), project_id)
+                "UPDATE projects SET is_archived=1, updated_at=? WHERE id=?",
+                (utc_now(), project_id),
             )
         return cursor.rowcount > 0
 
@@ -329,10 +389,18 @@ class AppStore:
                 "INSERT INTO task_messages(id, task_id, role, content, created_at) VALUES (?, ?, ?, ?, ?)",
                 (message_id, task_id, role, content, now),
             )
-        return {"id": message_id, "task_id": task_id, "role": role, "content": content, "created_at": now}
+        return {
+            "id": message_id,
+            "task_id": task_id,
+            "role": role,
+            "content": content,
+            "created_at": now,
+        }
 
     def list_messages(self, task_id: str) -> list[dict[str, Any]]:
-        return self._all("SELECT * FROM task_messages WHERE task_id=? ORDER BY created_at, rowid", (task_id,))
+        return self._all(
+            "SELECT * FROM task_messages WHERE task_id=? ORDER BY created_at, rowid", (task_id,)
+        )
 
     def add_plan(self, task_id: str, plan_id: str, plan: Mapping[str, Any]) -> None:
         with self.transaction() as connection:
@@ -468,7 +536,13 @@ class AppStore:
         with self.transaction() as connection:
             connection.execute(
                 "INSERT INTO task_snapshots(id, task_id, proposal_id, manifest_json, created_at) VALUES (?, ?, ?, ?, ?)",
-                (snapshot_id, task_id, proposal_id, json.dumps(manifest, ensure_ascii=False), utc_now()),
+                (
+                    snapshot_id,
+                    task_id,
+                    proposal_id,
+                    json.dumps(manifest, ensure_ascii=False),
+                    utc_now(),
+                ),
             )
             connection.execute(
                 "UPDATE task_proposals SET snapshot_id=? WHERE id=?", (snapshot_id, proposal_id)
@@ -484,7 +558,9 @@ class AppStore:
     def mark_snapshot_rolled_back(self, snapshot_id: str, proposal_id: str) -> None:
         now = utc_now()
         with self.transaction() as connection:
-            connection.execute("UPDATE task_snapshots SET rolled_back_at=? WHERE id=?", (now, snapshot_id))
+            connection.execute(
+                "UPDATE task_snapshots SET rolled_back_at=? WHERE id=?", (now, snapshot_id)
+            )
             connection.execute(
                 "UPDATE task_proposals SET rolled_back_at=?, status='rolled_back' WHERE id=?",
                 (now, proposal_id),
@@ -498,7 +574,9 @@ class AppStore:
             )
 
     def list_events(self, task_id: str) -> list[dict[str, Any]]:
-        rows = self._all("SELECT * FROM task_events WHERE task_id=? ORDER BY created_at, rowid", (task_id,))
+        rows = self._all(
+            "SELECT * FROM task_events WHERE task_id=? ORDER BY created_at, rowid", (task_id,)
+        )
         return [json.loads(str(row["event_json"])) for row in rows]
 
     def get_settings(self) -> dict[str, Any]:

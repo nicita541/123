@@ -271,13 +271,6 @@ async function selectProject(event) {
 }
 
 async function chooseFolder() {
-  try {
-    if (window.pywebview?.api?.choose_project) {
-      const path = await window.pywebview.api.choose_project();
-      if (path) { $("projectInput").value = path; $("projectForm").requestSubmit(); }
-      return;
-    }
-  } catch (_) { /* browser fallback below */ }
   $("projectForm").hidden = false;
   $("projectInput").focus();
 }

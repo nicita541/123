@@ -2,10 +2,9 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
 $repo = Split-Path -Parent $PSScriptRoot
-$python = Join-Path $repo ".venv\Scripts\python.exe"
-if (-not (Test-Path -LiteralPath $python -PathType Leaf)) {
-    python -m venv (Join-Path $repo ".venv")
-}
-
 Set-Location $repo
-& $python -m pip install -e ".[desktop,dev]"
+
+dotnet restore desktop/AiAgent.Desktop.sln
+if ($LASTEXITCODE -ne 0) {
+    throw "Desktop restore failed. Install the .NET 10 SDK and try again."
+}

@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import ntpath
+import os
+import re
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -159,6 +162,55 @@ class SessionStore:
         self.runtime = self._runtime_for_project(self.active_project_id)
         return resolved
 
+    def register_project_mapping(
+        self,
+        *,
+        name: str,
+        mount_id: str,
+        host_path: str,
+        container_path: str,
+    ) -> dict[str, Any]:
+        configured_root = os.environ.get("AGENT_PROJECTS_ROOT")
+        if not configured_root:
+            raise ValueError("Project mount registration requires AGENT_PROJECTS_ROOT.")
+        if not re.fullmatch(r"[a-z0-9][a-z0-9_-]{7,63}", mount_id):
+            raise ValueError("Invalid project mount id.")
+
+        allowed_root = Path(configured_root).expanduser().resolve()
+        expected_path = (allowed_root / mount_id).resolve()
+        requested_path = Path(container_path).expanduser().resolve()
+        if requested_path != expected_path:
+            raise ValueError(f"Container path must be {expected_path} for this mount id.")
+        resolved = self._require_project_root(requested_path)
+
+        existing_mount = self.app_store.get_project_by_mount_id(mount_id)
+        if existing_mount and Path(str(existing_mount["root_path"])).resolve() != resolved:
+            raise ValueError("Project mount id is already registered for another container path.")
+
+        normalized_host = ntpath.normpath(host_path.strip())
+        if (
+            not ntpath.isabs(normalized_host)
+            or normalized_host == ntpath.splitdrive(normalized_host)[0] + "\\"
+        ):
+            raise ValueError(
+                "Host path metadata must be an absolute project folder, not a drive root."
+            )
+        if not name.strip():
+            raise ValueError("Project name cannot be blank.")
+
+        project = self.app_store.upsert_project(
+            resolved,
+            name=name.strip(),
+            default_mode=self.default_mode,
+            mount_id=mount_id,
+            host_path=normalized_host,
+            container_path=resolved,
+        )
+        self.active_project_id = str(project["id"])
+        self.app_store.open_project(self.active_project_id)
+        self.runtime = self._runtime_for_project(self.active_project_id)
+        return self.app_store.get_project(self.active_project_id) or project
+
     def open_project(self, project_id: str) -> dict[str, Any] | None:
         project = self.app_store.get_project(project_id)
         if project is None:
@@ -174,6 +226,15 @@ class SessionStore:
         app_root = self.app_store.paths.root.resolve()
         if resolved == app_root or app_root in resolved.parents:
             raise ValueError("Application data cannot be selected as a coding project.")
+        configured_root = os.environ.get("AGENT_PROJECTS_ROOT")
+        if configured_root:
+            allowed_root = Path(configured_root).expanduser().resolve()
+            if resolved == allowed_root:
+                raise ValueError("Choose a project folder below the configured projects root.")
+            if allowed_root not in resolved.parents:
+                raise ValueError(
+                    f"Project must be below the configured projects root: {allowed_root}"
+                )
         return resolved
 
     def archive_project(self, project_id: str) -> bool:
@@ -183,7 +244,9 @@ class SessionStore:
                 self.open_project(str(alternatives[0]["id"]))
         return self.app_store.archive_project(project_id)
 
-    def list_projects(self, *, include_archived: bool = False, search: str = "") -> list[dict[str, Any]]:
+    def list_projects(
+        self, *, include_archived: bool = False, search: str = ""
+    ) -> list[dict[str, Any]]:
         return self.app_store.list_projects(include_archived=include_archived, search=search)
 
     def get_or_create_chat(self, session_id: str | None = None) -> ChatSession:
@@ -247,7 +310,11 @@ class SessionStore:
         if status == "failed":
             self._record_event(
                 task.id,
-                {"type": "llm_unavailable", "title": "Ollama недоступен", "detail": "; ".join(plan.risks)},
+                {
+                    "type": "llm_unavailable",
+                    "title": "Ollama недоступен",
+                    "detail": "; ".join(plan.risks),
+                },
             )
         task_session = self._hydrate_task(task.id)
         if task_session is None:
@@ -321,11 +388,17 @@ class SessionStore:
             self.app_store.update_task(task_id, status="failed")
             self._record_event(
                 task_id,
-                {"type": "proposal_failed", "title": "Не удалось предложить изменения", "detail": str(exc)},
+                {
+                    "type": "proposal_failed",
+                    "title": "Не удалось предложить изменения",
+                    "detail": str(exc),
+                },
             )
             self.task_sessions.pop(task_id, None)
             return self.get_task(task_id)
-        return self._persist_proposal(task_session, proposal, fix_iteration=task_session.fix_iteration)
+        return self._persist_proposal(
+            task_session, proposal, fix_iteration=task_session.fix_iteration
+        )
 
     def propose_fix(self, task_id: str) -> TaskSession | None:
         task_session = self.get_task(task_id)
@@ -352,14 +425,20 @@ class SessionStore:
         except Exception as exc:  # noqa: BLE001
             self._record_event(
                 task_id,
-                {"type": "fix_proposal_failed", "title": "Не удалось предложить исправление", "detail": str(exc)},
+                {
+                    "type": "fix_proposal_failed",
+                    "title": "Не удалось предложить исправление",
+                    "detail": str(exc),
+                },
             )
             return self.get_task(task_id)
         self.app_store.update_task(task_id, fix_iteration=next_iteration)
         task_session.fix_iteration = next_iteration
         return self._persist_proposal(task_session, proposal, fix_iteration=next_iteration)
 
-    def _persist_proposal(self, task_session: TaskSession, proposal: object, *, fix_iteration: int) -> TaskSession:
+    def _persist_proposal(
+        self, task_session: TaskSession, proposal: object, *, fix_iteration: int
+    ) -> TaskSession:
         step_id = new_id("step")
         record = self.app_store.add_proposal(
             task_session.id,
@@ -402,7 +481,9 @@ class SessionStore:
         runtime = self._runtime_for_project(task_session.project_id)
         runtime.approval_gate.approve(task_id=task_id, step_id=step_id, action=action)
         self.app_store.update_task(task_id, status="approved")
-        self._record_event(task_id, {"type": "approval_granted", "step_id": step_id, "action": action})
+        self._record_event(
+            task_id, {"type": "approval_granted", "step_id": step_id, "action": action}
+        )
         self.task_sessions.pop(task_id, None)
         return True
 
@@ -415,7 +496,9 @@ class SessionStore:
             return False
         self.app_store.add_approval(task_id, step_id, action, "rejected")
         self.app_store.update_task(task_id, status="rejected")
-        self._record_event(task_id, {"type": "approval_rejected", "step_id": step_id, "action": action})
+        self._record_event(
+            task_id, {"type": "approval_rejected", "step_id": step_id, "action": action}
+        )
         self.task_sessions.pop(task_id, None)
         return True
 
@@ -429,7 +512,9 @@ class SessionStore:
         if task_session.pending_approvals:
             task_session.status = "waiting_approval"
             self.app_store.update_task(task_id, status="waiting_approval")
-            self._record_event(task_id, {"type": "pending_approval", "count": len(task_session.pending_approvals)})
+            self._record_event(
+                task_id, {"type": "pending_approval", "count": len(task_session.pending_approvals)}
+            )
             return task_session
         runtime = self._runtime_for_project(task_session.project_id)
         state = runtime.run_plan(task_session.task, task_session.plan, persist=False)
@@ -476,9 +561,13 @@ class SessionStore:
             safety=runtime.safety,
         )
         self.app_store.update_task(task_session.id, status="applying")
-        apply_result = runtime.registry.run("apply_patch", {"patch": task_session.proposed_patch}, context)
+        apply_result = runtime.registry.run(
+            "apply_patch", {"patch": task_session.proposed_patch}, context
+        )
         self.snapshot_manager.capture_after(manifest, runtime.project_root)
-        snapshot_id = self.app_store.add_snapshot(task_session.id, task_session.proposal_id, manifest)
+        snapshot_id = self.app_store.add_snapshot(
+            task_session.id, task_session.proposal_id, manifest
+        )
         self._record_event(
             task_session.id,
             {
@@ -495,7 +584,9 @@ class SessionStore:
                 success=False,
                 error=apply_result.error or "Patch failed.",
             )
-            self.app_store.update_proposal(task_session.proposal_id, status="failed", snapshot_id=snapshot_id)
+            self.app_store.update_proposal(
+                task_session.proposal_id, status="failed", snapshot_id=snapshot_id
+            )
             self.app_store.add_run(
                 task_session.id,
                 status="failed",
@@ -643,7 +734,9 @@ class SessionStore:
             "ui_preferences",
         }
         updates = {key: value for key, value in values.items() if key in allowed}
-        if "ollama_base_url" in updates and not str(updates["ollama_base_url"]).startswith(("http://", "https://")):
+        if "ollama_base_url" in updates and not str(updates["ollama_base_url"]).startswith(
+            ("http://", "https://")
+        ):
             raise ValueError("Ollama base URL must use http:// or https://.")
         if "default_access_mode" in updates and updates["default_access_mode"] not in {
             "plan",
@@ -742,7 +835,9 @@ class SessionStore:
             verification_output=str(run["verification_output"]) if run else "",
             verification_command=str(run["verification_command"]) if run else "",
             final_report_text=str(run["report"]) if run else "",
-            skill_name=str(proposal["skill_name"]) if proposal and proposal.get("skill_name") else None,
+            skill_name=str(proposal["skill_name"])
+            if proposal and proposal.get("skill_name")
+            else None,
             fix_iteration=int(row["fix_iteration"]),
             parent_task_id=str(row["parent_task_id"]) if row.get("parent_task_id") else None,
             created_at=str(row["created_at"]),
@@ -807,7 +902,9 @@ def deserialize_plan(data: Mapping[str, Any], task: Task) -> Plan:
         task_id=task.id,
         goal=str(data.get("goal") or task.normalized_goal),
         steps=steps,
-        risks=[str(value) for value in data.get("risks", [])] if isinstance(data.get("risks"), list) else [],
+        risks=[str(value) for value in data.get("risks", [])]
+        if isinstance(data.get("risks"), list)
+        else [],
         approval_points=[str(value) for value in data.get("approval_points", [])]
         if isinstance(data.get("approval_points"), list)
         else [],
@@ -909,7 +1006,9 @@ def _build_patch_report(
         task_session.task.normalized_goal,
         "",
         "## Источник изменений",
-        "- provider: ollama" if task_session.skill_name != "python_calculator" else "- provider: deterministic test fallback",
+        "- provider: ollama"
+        if task_session.skill_name != "python_calculator"
+        else "- provider: deterministic test fallback",
         f"- skill: {task_session.skill_name or 'unknown'}",
         "",
         "## Что сделано",

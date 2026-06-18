@@ -32,6 +32,13 @@ class ProjectCreateRequest(BaseModel):
     name: str | None = None
 
 
+class ProjectRegistrationRequest(BaseModel):
+    name: str = Field(min_length=1, max_length=200)
+    mount_id: str = Field(min_length=8, max_length=64)
+    host_path: str = Field(min_length=3, max_length=1024)
+    container_path: str = Field(min_length=10, max_length=1024)
+
+
 class ContinueTaskRequest(BaseModel):
     message: str = Field(min_length=1)
 

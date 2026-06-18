@@ -1,40 +1,92 @@
 services:
-  agent-app:
+  ollama:
+    image: ${OLLAMA_IMAGE:-ollama/ollama:latest}
+    ports:
+      - "127.0.0.1:11434:11434"
+    volumes:
+      - ollama-data:/root/.ollama
+    healthcheck:
+      test: ["CMD", "ollama", "list"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 10s
+    restart: unless-stopped
+
+  model-init:
+    image: ${OLLAMA_IMAGE:-ollama/ollama:latest}
+    depends_on:
+      ollama:
+        condition: service_healthy
+    environment:
+      OLLAMA_HOST: http://ollama:11434
+      OLLAMA_MODEL: ${OLLAMA_MODEL:-qwen2.5-coder:1.5b}
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - ollama pull "$${OLLAMA_MODEL}"
+    restart: "no"
+
+  data-init:
     build:
       context: .
       dockerfile: Dockerfile
-    ports:
-      - "8765:8765"
+      args:
+        AGENT_UID: ${AGENT_UID:-1000}
+        AGENT_GID: ${AGENT_GID:-1000}
+    user: "0:0"
     environment:
-      AGENT_PROJECT_ROOT: /workspace
-      COMPLEX_AGENT_DATA_DIR: /data
-      OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-http://host.docker.internal:11434}
-      OLLAMA_MODEL: ${OLLAMA_MODEL:-qwen2.5-coder:7b-instruct}
+      AGENT_UID: ${AGENT_UID:-1000}
+      AGENT_GID: ${AGENT_GID:-1000}
     volumes:
-      - ${AGENT_WORKSPACE:-./examples/docker_workspace}:/workspace
       - agent-data:/data
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - chown -R "$${AGENT_UID}:$${AGENT_GID}" /data
+    restart: "no"
+
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        AGENT_UID: ${AGENT_UID:-1000}
+        AGENT_GID: ${AGENT_GID:-1000}
+    depends_on:
+      data-init:
+        condition: service_completed_successfully
+      ollama:
+        condition: service_healthy
+    ports:
+      - "127.0.0.1:8765:8765"
+    environment:
+      AGENT_PROJECTS_ROOT: /projects
+      AGENT_PROJECT_ROOT: ${AGENT_DEFAULT_PROJECT:-/projects/docker_workspace}
+      COMPLEX_AGENT_DATA_DIR: /data
+      OLLAMA_BASE_URL: http://ollama:11434
+      OLLAMA_MODEL: ${OLLAMA_MODEL:-qwen2.5-coder:1.5b}
+    volumes:
+      - ${AGENT_PROJECTS_ROOT:-./examples}:/projects
+      - agent-data:/data
     command:
       - python
       - -m
       - complex_agent.main
       - serve
       - --project
-      - /workspace
+      - ${AGENT_DEFAULT_PROJECT:-/projects/docker_workspace}
       - --host
       - 0.0.0.0
       - --port
       - "8765"
-
-  ollama:
-    image: ollama/ollama:latest
-    profiles:
-      - ollama
-    ports:
-      - "11434:11434"
-    volumes:
-      - ollama-data:/root/.ollama
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8765/health', timeout=2)"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 10s
+    security_opt:
+      - no-new-privileges:true
+    restart: unless-stopped
 
 volumes:
   ollama-data:

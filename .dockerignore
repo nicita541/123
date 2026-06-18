@@ -12,4 +12,7 @@ build
 .env
 .env.*
 node_modules
+desktop
+bin
+obj
 docs/final_desktop_ollama_validation_report.md

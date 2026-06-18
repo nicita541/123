@@ -1,0 +1,271 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:vm="using:AiAgent.Desktop.ViewModels"
+        xmlns:models="using:AiAgent.Desktop.Core.Models"
+        x:Class="AiAgent.Desktop.Views.MainWindow"
+        x:DataType="vm:MainWindowViewModel"
+        Title="Local Agent Workspace"
+        Width="1500"
+        Height="940"
+        MinWidth="1180"
+        MinHeight="760"
+        WindowStartupLocation="CenterScreen">
+    <Grid RowDefinitions="56,*,116">
+        <Border Grid.Row="0"
+                Background="{DynamicResource PanelBackgroundBrush}"
+                BorderBrush="{DynamicResource CardBorderBrush}"
+                BorderThickness="0,0,0,1"
+                Padding="18,0">
+            <Grid ColumnDefinitions="Auto,*,Auto,Auto" VerticalAlignment="Center">
+                <StackPanel Orientation="Horizontal" Spacing="12" VerticalAlignment="Center">
+                    <Border Width="28" Height="28" CornerRadius="7" Background="{DynamicResource AccentBrush}">
+                        <TextBlock Text="A" HorizontalAlignment="Center" VerticalAlignment="Center" FontWeight="Bold" />
+                    </Border>
+                    <StackPanel>
+                        <TextBlock Text="Local Agent" FontSize="16" FontWeight="SemiBold" />
+                        <TextBlock Text="{Binding StatusMessage}" FontSize="11" Foreground="{DynamicResource MutedTextBrush}" />
+                    </StackPanel>
+                </StackPanel>
+                <ProgressBar Grid.Column="1"
+                             Margin="24,0"
+                             Height="3"
+                             IsIndeterminate="True"
+                             IsVisible="{Binding IsBusy}" />
+                <Button Grid.Column="2"
+                        Margin="0,0,8,0"
+                        Content="Cancel"
+                        Command="{Binding CancelOperationCommand}"
+                        IsVisible="{Binding IsBusy}" />
+                <Button Grid.Column="3" Content="Refresh" Command="{Binding RefreshStatusCommand}" />
+            </Grid>
+        </Border>
+
+        <Grid Grid.Row="1" ColumnDefinitions="270,*,310">
+            <Border Grid.Column="0"
+                    Background="{DynamicResource PanelBackgroundBrush}"
+                    BorderBrush="{DynamicResource CardBorderBrush}"
+                    BorderThickness="0,0,1,0"
+                    Padding="14">
+                <Grid RowDefinitions="Auto,220,Auto,*,Auto">
+                    <Grid ColumnDefinitions="*,Auto" Margin="0,0,0,10">
+                        <TextBlock Text="PROJECTS" Classes="section-title" VerticalAlignment="Center" />
+                        <Button Grid.Column="1" Content="+ Add" Command="{Binding AddProjectCommand}" />
+                    </Grid>
+                    <ListBox Grid.Row="1"
+                             ItemsSource="{Binding Projects}"
+                             SelectedItem="{Binding SelectedProject}"
+                             Background="Transparent"
+                             BorderThickness="0">
+                        <ListBox.ItemTemplate>
+                            <DataTemplate x:DataType="models:ProjectMount">
+                                <StackPanel Margin="4,7">
+                                    <TextBlock Text="{Binding Name}" FontWeight="SemiBold" />
+                                    <TextBlock Text="{Binding HostPath}"
+                                               FontSize="11"
+                                               Foreground="{DynamicResource MutedTextBrush}"
+                                               TextTrimming="CharacterEllipsis" />
+                                </StackPanel>
+                            </DataTemplate>
+                        </ListBox.ItemTemplate>
+                    </ListBox>
+                    <Grid Grid.Row="2" ColumnDefinitions="*,Auto" Margin="0,10,0,10">
+                        <TextBlock Text="TASK HISTORY" Classes="section-title" VerticalAlignment="Center" />
+                        <Button Grid.Column="1" Content="Open project" Command="{Binding OpenProjectCommand}" />
+                    </Grid>
+                    <ListBox Grid.Row="3"
+                             ItemsSource="{Binding Tasks}"
+                             SelectedItem="{Binding SelectedTask}"
+                             Background="Transparent"
+                             BorderThickness="0">
+                        <ListBox.ItemTemplate>
+                            <DataTemplate x:DataType="models:TaskSummaryDto">
+                                <StackPanel Margin="4,8">
+                                    <TextBlock Text="{Binding Title}" TextWrapping="Wrap" MaxLines="2" />
+                                    <StackPanel Orientation="Horizontal" Spacing="8">
+                                        <TextBlock Text="{Binding Status}" FontSize="11" Foreground="{DynamicResource AccentBrush}" />
+                                        <TextBlock Text="{Binding Mode}" FontSize="11" Foreground="{DynamicResource MutedTextBrush}" />
+                                    </StackPanel>
+                                </StackPanel>
+                            </DataTemplate>
+                        </ListBox.ItemTemplate>
+                    </ListBox>
+                    <Button Grid.Row="4"
+                            Margin="0,10,0,0"
+                            HorizontalAlignment="Stretch"
+                            Content="Open selected task"
+                            Command="{Binding OpenTaskCommand}"
+                            CommandParameter="{Binding SelectedTask}" />
+                </Grid>
+            </Border>
+
+            <ScrollViewer Grid.Column="1" Padding="22" HorizontalScrollBarVisibility="Disabled">
+                <StackPanel Spacing="14" MaxWidth="920">
+                    <Grid ColumnDefinitions="*,Auto">
+                        <StackPanel>
+                            <TextBlock Text="{Binding Detail.Title}" FontSize="23" FontWeight="SemiBold" TextWrapping="Wrap" />
+                            <TextBlock Text="{Binding Detail.ProviderText}" Foreground="{DynamicResource MutedTextBrush}" />
+                        </StackPanel>
+                        <Border Grid.Column="1" Classes="card" Padding="10,5" VerticalAlignment="Top">
+                            <TextBlock Text="{Binding Detail.Status}" Foreground="{DynamicResource AccentBrush}" />
+                        </Border>
+                    </Grid>
+
+                    <Border Classes="card" IsVisible="{Binding Detail.HasPlan}">
+                        <StackPanel Spacing="10">
+                            <TextBlock Text="Plan" Classes="card-title" />
+                            <TextBox Text="{Binding Detail.PlanText}"
+                                     Classes="code"
+                                     IsReadOnly="True"
+                                     AcceptsReturn="True"
+                                     MinHeight="140"
+                                     MaxHeight="340"
+                                     TextWrapping="Wrap" />
+                        </StackPanel>
+                    </Border>
+
+                    <Border Classes="card" IsVisible="{Binding Detail.HasDiff}">
+                        <StackPanel Spacing="10">
+                            <Grid ColumnDefinitions="*,Auto">
+                                <TextBlock Text="Proposed diff" Classes="card-title" />
+                                <TextBlock Grid.Column="1" Text="Not applied" Foreground="#F5B942" />
+                            </Grid>
+                            <TextBox Text="{Binding Detail.DiffText}"
+                                     Classes="code"
+                                     IsReadOnly="True"
+                                     AcceptsReturn="True"
+                                     MinHeight="220"
+                                     MaxHeight="520"
+                                     ScrollViewer.HorizontalScrollBarVisibility="Auto"
+                                     ScrollViewer.VerticalScrollBarVisibility="Auto"
+                                     TextWrapping="NoWrap" />
+                        </StackPanel>
+                    </Border>
+
+                    <Border Classes="card" IsVisible="{Binding Detail.HasApproval}" BorderBrush="#8B6F2F">
+                        <StackPanel Spacing="12">
+                            <TextBlock Text="Approval required" Classes="card-title" />
+                            <ItemsControl ItemsSource="{Binding Detail.Approvals}">
+                                <ItemsControl.ItemTemplate>
+                                    <DataTemplate x:DataType="models:ApprovalDto">
+                                        <StackPanel Margin="0,4">
+                                            <TextBlock Text="{Binding Description}" TextWrapping="Wrap" />
+                                            <TextBlock Text="{Binding Risk, StringFormat='Risk: {0}'}"
+                                                       Foreground="#F5B942"
+                                                       FontSize="11" />
+                                        </StackPanel>
+                                    </DataTemplate>
+                                </ItemsControl.ItemTemplate>
+                            </ItemsControl>
+                            <StackPanel Orientation="Horizontal" Spacing="8">
+                                <Button Classes="primary" Content="Approve" Command="{Binding ApproveCommand}" />
+                                <Button Content="Reject" Command="{Binding RejectCommand}" />
+                            </StackPanel>
+                        </StackPanel>
+                    </Border>
+
+                    <Border Classes="card" IsVisible="{Binding Detail.HasTask}">
+                        <StackPanel Orientation="Horizontal" Spacing="8">
+                            <Button Classes="primary" Content="Run approved task" Command="{Binding RunTaskCommand}" />
+                            <Button Content="Rollback" Command="{Binding RollbackCommand}" IsVisible="{Binding Detail.CanRollback}" />
+                        </StackPanel>
+                    </Border>
+
+                    <Border Classes="card" IsVisible="{Binding Detail.HasVerification}">
+                        <StackPanel Spacing="10">
+                            <TextBlock Text="Verification" Classes="card-title" />
+                            <TextBox Text="{Binding Detail.VerificationText}"
+                                     Classes="code"
+                                     IsReadOnly="True"
+                                     AcceptsReturn="True"
+                                     MinHeight="100"
+                                     TextWrapping="Wrap" />
+                        </StackPanel>
+                    </Border>
+
+                    <Border Classes="card" IsVisible="{Binding Detail.HasReport}">
+                        <StackPanel Spacing="10">
+                            <TextBlock Text="Final report" Classes="card-title" />
+                            <TextBlock Text="{Binding Detail.ReportText}" TextWrapping="Wrap" />
+                        </StackPanel>
+                    </Border>
+                </StackPanel>
+            </ScrollViewer>
+
+            <Border Grid.Column="2"
+                    Background="{DynamicResource PanelBackgroundBrush}"
+                    BorderBrush="{DynamicResource CardBorderBrush}"
+                    BorderThickness="1,0,0,0"
+                    Padding="14">
+                <ScrollViewer>
+                    <StackPanel Spacing="12">
+                        <TextBlock Text="ENVIRONMENT" Classes="section-title" />
+                        <Border Classes="card">
+                            <StackPanel Spacing="9">
+                                <Grid ColumnDefinitions="110,*">
+                                    <TextBlock Text="Docker" Foreground="{DynamicResource MutedTextBrush}" />
+                                    <TextBlock Grid.Column="1" Text="{Binding DockerStatus}" TextWrapping="Wrap" />
+                                </Grid>
+                                <Grid ColumnDefinitions="110,*">
+                                    <TextBlock Text="Backend" Foreground="{DynamicResource MutedTextBrush}" />
+                                    <TextBlock Grid.Column="1" Text="{Binding BackendStatus}" TextWrapping="Wrap" />
+                                </Grid>
+                                <Grid ColumnDefinitions="110,*">
+                                    <TextBlock Text="Ollama" Foreground="{DynamicResource MutedTextBrush}" />
+                                    <TextBlock Grid.Column="1" Text="{Binding OllamaStatus}" TextWrapping="Wrap" />
+                                </Grid>
+                                <Grid ColumnDefinitions="110,*">
+                                    <TextBlock Text="Model" Foreground="{DynamicResource MutedTextBrush}" />
+                                    <TextBlock Grid.Column="1" Text="{Binding ModelStatus}" TextWrapping="Wrap" />
+                                </Grid>
+                            </StackPanel>
+                        </Border>
+                        <StackPanel Orientation="Horizontal" Spacing="6">
+                            <Button Classes="primary" Content="Start" Command="{Binding StartServicesCommand}" />
+                            <Button Content="Stop" Command="{Binding StopServicesCommand}" />
+                        </StackPanel>
+                        <TextBlock Text="OLLAMA MODEL" Classes="section-title" Margin="0,8,0,0" />
+                        <TextBox Text="{Binding SelectedModel}" PlaceholderText="qwen3:8b" />
+                        <Button Content="Pull model" Command="{Binding PullModelCommand}" HorizontalAlignment="Stretch" />
+                        <TextBlock Text="Installed models" Classes="section-title" />
+                        <ItemsControl ItemsSource="{Binding AvailableModels}">
+                            <ItemsControl.ItemTemplate>
+                                <DataTemplate x:DataType="x:String">
+                                    <TextBlock Text="{Binding}" Margin="4,2" FontFamily="Cascadia Mono, Consolas" FontSize="11" />
+                                </DataTemplate>
+                            </ItemsControl.ItemTemplate>
+                        </ItemsControl>
+                        <TextBlock Text="ACTIVITY" Classes="section-title" Margin="0,8,0,0" />
+                        <TextBox Text="{Binding EnvironmentLog}"
+                                 Classes="code"
+                                 IsReadOnly="True"
+                                 AcceptsReturn="True"
+                                 MinHeight="180"
+                                 TextWrapping="Wrap"
+                                 ScrollViewer.VerticalScrollBarVisibility="Auto" />
+                    </StackPanel>
+                </ScrollViewer>
+            </Border>
+        </Grid>
+
+        <Border Grid.Row="2"
+                Background="{DynamicResource PanelBackgroundBrush}"
+                BorderBrush="{DynamicResource CardBorderBrush}"
+                BorderThickness="0,1,0,0"
+                Padding="18,12">
+            <Grid ColumnDefinitions="*,110,120" ColumnSpacing="10">
+                <TextBox Text="{Binding ComposerText}"
+                         AcceptsReturn="True"
+                         TextWrapping="Wrap"
+                         PlaceholderText="Describe a task for the selected project..."
+                         VerticalContentAlignment="Top" />
+                <ComboBox Grid.Column="1"
+                          ItemsSource="{Binding Modes}"
+                          SelectedItem="{Binding SelectedMode}" />
+                <Button Grid.Column="2"
+                        Classes="primary"
+                        Content="Send task"
+                        Command="{Binding SendTaskCommand}" />
+            </Grid>
+        </Border>
+    </Grid>
+</Window>

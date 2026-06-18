@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import os
 import tempfile
 import unittest
 from pathlib import Path
 from typing import Any
+from unittest.mock import patch
 
 from fastapi.testclient import TestClient
 
@@ -98,9 +100,65 @@ class ProductizationApiTests(unittest.TestCase):
                 "/api/tasks/plan",
                 json={"task": CALCULATOR_TASK, "mode": "review", "project_id": second_project},
             ).json()["task_id"]
-            self.assertEqual(client.get(f"/api/tasks?project_id={first_project}").json()["tasks"], [])
+            self.assertEqual(
+                client.get(f"/api/tasks?project_id={first_project}").json()["tasks"], []
+            )
             second_tasks = client.get(f"/api/tasks?project_id={second_project}").json()["tasks"]
             self.assertEqual([task["id"] for task in second_tasks], [task_id])
+
+    def test_container_mode_registers_only_exact_mounted_project_paths(self) -> None:
+        mount_id = "project_12345678"
+        with (
+            tempfile.TemporaryDirectory() as projects,
+            tempfile.TemporaryDirectory() as data,
+        ):
+            default_project = Path(projects, "default")
+            mounted_project = Path(projects, mount_id)
+            unsafe_project = Path(projects, "project_abcdefgh")
+            default_project.mkdir()
+            mounted_project.mkdir()
+            unsafe_project.mkdir()
+            with patch.dict(os.environ, {"AGENT_PROJECTS_ROOT": projects}):
+                client, _ = self._client(str(default_project), data)
+                response = client.post(
+                    "/api/projects/register",
+                    json={
+                        "name": "Todo",
+                        "mount_id": mount_id,
+                        "host_path": r"F:\1",
+                        "container_path": str(mounted_project),
+                    },
+                )
+                self.assertEqual(response.status_code, 200)
+                project = response.json()
+                self.assertEqual(project["mount_id"], mount_id)
+                self.assertEqual(project["host_path"], r"F:\1")
+                self.assertEqual(project["container_path"], str(mounted_project.resolve()))
+
+                bypass = client.post("/api/projects", json={"root_path": str(mounted_project)})
+                self.assertEqual(bypass.status_code, 400)
+
+                wrong_mapping = client.post(
+                    "/api/projects/register",
+                    json={
+                        "name": "Wrong",
+                        "mount_id": "project_abcdefgh",
+                        "host_path": r"F:\2",
+                        "container_path": str(mounted_project),
+                    },
+                )
+                self.assertEqual(wrong_mapping.status_code, 400)
+
+                drive_root = client.post(
+                    "/api/projects/register",
+                    json={
+                        "name": "Unsafe",
+                        "mount_id": "project_abcdefgh",
+                        "host_path": "F:\\",
+                        "container_path": str(unsafe_project),
+                    },
+                )
+                self.assertEqual(drive_root.status_code, 400)
 
     def test_application_data_cannot_be_selected_as_project(self) -> None:
         with tempfile.TemporaryDirectory() as project, tempfile.TemporaryDirectory() as data:

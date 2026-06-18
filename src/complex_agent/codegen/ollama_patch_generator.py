@@ -26,20 +26,33 @@ class OllamaPatchGenerator:
         self.provider.select_available_model()
         context = _project_context(project_root, self.safety)
         plan_text = _plan_text(plan)
+        expected_paths = _expected_paths(plan, project_root, task_text)
         last_error: Exception | None = None
         for strict in (False, True):
-            prompt = _patch_prompt(task_text, plan_text, context, strict=strict)
+            prompt = _patch_prompt(
+                task_text,
+                plan_text,
+                context,
+                expected_paths=expected_paths,
+                strict=strict,
+            )
             try:
                 text = self.provider.complete(prompt).strip()
                 patch = self.extract_diff(text)
                 self.validate_patch(patch)
+                changed_files = extract_patch_paths(patch)
+                missing_paths = [path for path in expected_paths if path not in changed_files]
+                if missing_paths:
+                    raise OllamaError(
+                        "Patch omitted required target paths: " + ", ".join(missing_paths)
+                    )
                 validate_patch_dry_run(
                     patch,
                     ToolContext(project_root=project_root, safety=self.safety),
                 )
                 return OllamaPatch(
                     patch=patch,
-                    changed_files=extract_patch_paths(patch),
+                    changed_files=changed_files,
                     summary=f"Ollama ({self.provider.model}) proposed a validated unified diff.",
                 )
             except Exception as exc:  # noqa: BLE001 - retry once with stricter prompt
@@ -49,9 +62,21 @@ class OllamaPatchGenerator:
     def extract_diff(self, text: str) -> str:
         if not text:
             raise OllamaError("Ollama returned an empty patch response.")
-        if "```" in text:
-            raise OllamaError("Markdown fenced patches are not accepted.")
         stripped = text.strip()
+        if "```" in stripped:
+            lines = stripped.splitlines()
+            fence_indexes = [
+                index for index, line in enumerate(lines) if line.strip().startswith("```")
+            ]
+            if len(fence_indexes) != 2:
+                raise OllamaError("Patch response must contain exactly one Markdown fence.")
+            start, end = fence_indexes
+            opening = lines[start].strip().lower()
+            if opening not in {"```", "```diff", "```patch"} or lines[end].strip() != "```":
+                raise OllamaError("Patch response contains unsupported Markdown content.")
+            stripped = "\n".join(lines[start + 1 : end]).strip()
+            if "```" in stripped:
+                raise OllamaError("Patch response contains nested Markdown fences.")
         if not (stripped.startswith("--- ") or stripped.startswith("diff --git ")):
             raise OllamaError("Patch response must start with a unified diff header.")
         return stripped + "\n"
@@ -88,10 +113,20 @@ def extract_patch_paths(patch: str) -> list[str]:
     return paths
 
 
-def _patch_prompt(task_text: str, plan_text: str, context: str, *, strict: bool) -> str:
-    retry = (
-        "Your previous answer was invalid. Return ONLY a valid unified diff. "
-        if strict
+def _patch_prompt(
+    task_text: str,
+    plan_text: str,
+    context: str,
+    *,
+    expected_paths: list[str],
+    strict: bool,
+) -> str:
+    retry = "Your previous answer was invalid. Return ONLY a valid unified diff. " if strict else ""
+    required_paths = (
+        "Required changed paths: "
+        + ", ".join(expected_paths)
+        + ". Do not rename or substitute these paths. "
+        if expected_paths
         else ""
     )
     return (
@@ -103,6 +138,7 @@ def _patch_prompt(task_text: str, plan_text: str, context: str, *, strict: bool)
         "Do not use absolute paths or path traversal. "
         "Prefer small, self-contained changes. "
         "If creating a Python file, include syntactically valid Python and avoid interactive verification commands. "
+        f"{required_paths}"
         f"Selected project context:\n{context}\n\n"
         f"Plan:\n{plan_text}\n\n"
         f"Task:\n{task_text}"
@@ -131,7 +167,35 @@ def _plan_text(plan: Plan | None) -> str:
         return "No prior plan."
     lines = [f"Goal: {plan.goal}"]
     for index, step in enumerate(plan.steps, start=1):
-        lines.append(f"{index}. {step.description} [tool={step.required_tool}, risk={step.risk_level.value}]")
+        lines.append(
+            f"{index}. {step.description} [tool={step.required_tool}, risk={step.risk_level.value}]"
+        )
     if plan.risks:
         lines.append("Risks: " + "; ".join(plan.risks))
     return "\n".join(lines)
+
+
+def _expected_paths(plan: Plan | None, project_root: Path, task_text: str) -> list[str]:
+    if plan is None:
+        return []
+    expected: list[str] = []
+    prefix = "Expected files:"
+    for risk in plan.risks:
+        if not risk.startswith(prefix):
+            continue
+        for raw in risk[len(prefix) :].split(","):
+            value = raw.strip()
+            if not value:
+                continue
+            path = Path(value)
+            if path.is_absolute():
+                try:
+                    path = path.resolve().relative_to(project_root.resolve())
+                except ValueError:
+                    continue
+            normalized = path.as_posix().removeprefix("./")
+            if Path(normalized).name.casefold() not in task_text.casefold():
+                continue
+            if normalized and normalized not in expected:
+                expected.append(normalized)
+    return expected

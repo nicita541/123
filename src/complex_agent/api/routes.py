@@ -15,6 +15,7 @@ from complex_agent.api.schemas import (
     GitDiffResponse,
     PlanRequest,
     ProjectCreateRequest,
+    ProjectRegistrationRequest,
     ProjectResponse,
     ProjectSelectRequest,
     RollbackRequest,
@@ -74,6 +75,11 @@ def create_router(store: SessionStore) -> APIRouter:
 
     @router.post("/api/projects")
     def create_project(payload: ProjectCreateRequest) -> dict[str, Any]:
+        if os.environ.get("AGENT_PROJECTS_ROOT"):
+            raise HTTPException(
+                status_code=400,
+                detail="Use /api/projects/register when project mounts are enabled.",
+            )
         try:
             store.select_project(payload.root_path, name=payload.name)
         except ValueError as exc:
@@ -81,6 +87,19 @@ def create_router(store: SessionStore) -> APIRouter:
         project = store.app_store.get_project(store.active_project_id)
         if project is None:
             raise HTTPException(status_code=500, detail="Project was not persisted.")
+        return _project_public(project, active_id=store.active_project_id)
+
+    @router.post("/api/projects/register")
+    def register_project(payload: ProjectRegistrationRequest) -> dict[str, Any]:
+        try:
+            project = store.register_project_mapping(
+                name=payload.name,
+                mount_id=payload.mount_id,
+                host_path=payload.host_path,
+                container_path=payload.container_path,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
         return _project_public(project, active_id=store.active_project_id)
 
     @router.get("/api/projects/{project_id}")
@@ -104,7 +123,11 @@ def create_router(store: SessionStore) -> APIRouter:
     def archive_project(project_id: str) -> dict[str, Any]:
         if not store.archive_project(project_id):
             raise HTTPException(status_code=404, detail="Unknown project.")
-        return {"project_id": project_id, "archived": True, "active_project_id": store.active_project_id}
+        return {
+            "project_id": project_id,
+            "archived": True,
+            "active_project_id": store.active_project_id,
+        }
 
     @router.get("/api/project", response_model=ProjectResponse)
     def get_project() -> dict[str, Any]:
@@ -112,6 +135,11 @@ def create_router(store: SessionStore) -> APIRouter:
 
     @router.post("/api/project/select", response_model=ProjectResponse)
     def select_project(payload: ProjectSelectRequest) -> dict[str, Any]:
+        if os.environ.get("AGENT_PROJECTS_ROOT"):
+            raise HTTPException(
+                status_code=400,
+                detail="Open a registered project by id when project mounts are enabled.",
+            )
         try:
             store.select_project(payload.path)
         except ValueError as exc:
@@ -160,7 +188,9 @@ def create_router(store: SessionStore) -> APIRouter:
 
     @router.post("/api/chat")
     def chat(payload: ChatRequest) -> dict[str, Any]:
-        return store.chat(payload.message, session_id=payload.session_id, mode=parse_mode(payload.mode))
+        return store.chat(
+            payload.message, session_id=payload.session_id, mode=parse_mode(payload.mode)
+        )
 
     @router.get("/api/tasks")
     def list_tasks(project_id: str | None = None) -> dict[str, Any]:
@@ -286,7 +316,11 @@ def create_router(store: SessionStore) -> APIRouter:
         if task_session is None:
             raise HTTPException(status_code=404, detail="Unknown task.")
         events: list[dict[str, Any]] = [
-            {"type": "task_status", "title": _event_title("task_status"), "status": task_session.status}
+            {
+                "type": "task_status",
+                "title": _event_title("task_status"),
+                "status": task_session.status,
+            }
         ]
         for event in task_session.events:
             event_type = str(event.get("type", "event"))
@@ -336,7 +370,9 @@ def create_router(store: SessionStore) -> APIRouter:
         parts: list[str] = []
         for path in sorted(store.app_store.paths.logs.glob("*.log")):
             parts.append(f"===== {path.name} =====\n")
-            parts.append(store.runtime.safety.redact(path.read_text(encoding="utf-8", errors="replace")))
+            parts.append(
+                store.runtime.safety.redact(path.read_text(encoding="utf-8", errors="replace"))
+            )
         content = "\n".join(parts) if parts else "No application logs have been recorded.\n"
         return Response(
             content=content,
@@ -372,7 +408,9 @@ def _validate_project_path(project_path: str | None, configured_root: Path) -> N
         return
     requested = Path(project_path).expanduser().resolve()
     if requested != configured_root:
-        raise HTTPException(status_code=400, detail="Use /api/project/select before planning in another folder.")
+        raise HTTPException(
+            status_code=400, detail="Use /api/project/select before planning in another folder."
+        )
 
 
 def _project_public(project: dict[str, Any], *, active_id: str) -> dict[str, Any]:
@@ -380,6 +418,9 @@ def _project_public(project: dict[str, Any], *, active_id: str) -> dict[str, Any
         "id": project["id"],
         "name": project["name"],
         "root_path": project["root_path"],
+        "mount_id": project.get("mount_id"),
+        "host_path": project.get("host_path"),
+        "container_path": project.get("container_path") or project["root_path"],
         "created_at": project["created_at"],
         "updated_at": project["updated_at"],
         "last_opened_at": project["last_opened_at"],
@@ -422,7 +463,9 @@ def _safe_file_items(store: SessionStore, *, limit: int) -> list[dict[str, str]]
         path = line.strip()
         if not path:
             continue
-        allowed, _ = store.runtime.safety.file_guard.validate_read(store.runtime.project_root / path)
+        allowed, _ = store.runtime.safety.file_guard.validate_read(
+            store.runtime.project_root / path
+        )
         if not allowed:
             continue
         file_path = Path(path)
@@ -430,7 +473,9 @@ def _safe_file_items(store: SessionStore, *, limit: int) -> list[dict[str, str]]
             {
                 "path": path,
                 "name": file_path.name,
-                "directory": file_path.parent.as_posix() if file_path.parent.as_posix() != "." else "",
+                "directory": file_path.parent.as_posix()
+                if file_path.parent.as_posix() != "."
+                else "",
                 "extension": file_path.suffix,
             }
         )
@@ -476,7 +521,9 @@ def _safe_changed_path(store: SessionStore, path: str) -> bool:
         return False
     if " -> " in normalized:
         normalized = normalized.rsplit(" -> ", 1)[-1]
-    allowed, _ = store.runtime.safety.file_guard.validate_write(store.runtime.project_root / normalized)
+    allowed, _ = store.runtime.safety.file_guard.validate_write(
+        store.runtime.project_root / normalized
+    )
     return allowed
 
 

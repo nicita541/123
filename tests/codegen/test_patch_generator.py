@@ -69,7 +69,9 @@ class PatchGeneratorTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
             generator = PatchGenerator(SafetyPolicy(root), allow_demo_fallback=True)
-            task = Task.create("Создай калькулятор на Python", mode=AgentMode.REVIEW, project_path=root)
+            task = Task.create(
+                "Создай калькулятор на Python", mode=AgentMode.REVIEW, project_path=root
+            )
             plan = generator.create_plan(task)
             proposal = generator.propose(task, root, plan=plan)
             self.assertTrue(plan.steps)
@@ -86,7 +88,9 @@ class PatchGeneratorTests(unittest.TestCase):
                 SafetyPolicy(root),
                 ollama_provider=FakeOllamaProvider(diff),  # type: ignore[arg-type]
             )
-            task = Task.create("Создай калькулятор на Python", mode=AgentMode.REVIEW, project_path=root)
+            task = Task.create(
+                "Создай калькулятор на Python", mode=AgentMode.REVIEW, project_path=root
+            )
             plan = generator.create_plan(task)
             proposal = generator.propose(task, root, plan=plan)
             self.assertEqual(proposal.skill_name, "ollama")
@@ -103,13 +107,7 @@ class PatchGeneratorTests(unittest.TestCase):
     def test_valid_ollama_diff_is_accepted_without_deterministic_fallback(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
-            diff = (
-                "--- /dev/null\n"
-                "+++ b/snake.py\n"
-                "@@ -0,0 +1,2 @@\n"
-                "+print('snake')\n"
-                "+\n"
-            )
+            diff = "--- /dev/null\n+++ b/snake.py\n@@ -0,0 +1,2 @@\n+print('snake')\n+\n"
             generator = PatchGenerator(
                 SafetyPolicy(root),
                 ollama_provider=FakeOllamaProvider(diff),  # type: ignore[arg-type]
@@ -133,7 +131,7 @@ class PatchGeneratorTests(unittest.TestCase):
             with self.assertRaises(Exception):
                 generator.propose(task, root, plan=plan)
 
-    def test_markdown_fenced_ollama_diff_is_rejected(self) -> None:
+    def test_single_markdown_fenced_ollama_diff_is_unwrapped_and_validated(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
             fenced = "```diff\n--- /dev/null\n+++ b/snake.py\n@@ -0,0 +1 @@\n+print('x')\n```"
@@ -142,6 +140,39 @@ class PatchGeneratorTests(unittest.TestCase):
                 ollama_provider=FakeOllamaProvider(fenced),  # type: ignore[arg-type]
             )
             task = Task.create("Создай snake.py", mode=AgentMode.REVIEW, project_path=root)
+            plan = generator.create_plan(task)
+            proposal = generator.propose(task, root, plan=plan)
+            self.assertEqual(proposal.changed_files, ["snake.py"])
+            self.assertTrue(proposal.patch.startswith("--- /dev/null"))
+
+    def test_markdown_explanation_around_single_fenced_diff_is_ignored(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            fenced = (
+                "Here is the patch:\n```diff\n--- /dev/null\n+++ b/snake.py\n"
+                "@@ -0,0 +1 @@\n+print('x')\n```"
+            )
+            generator = PatchGenerator(
+                SafetyPolicy(root),
+                ollama_provider=FakeOllamaProvider(fenced),  # type: ignore[arg-type]
+            )
+            task = Task.create("Create snake.py", mode=AgentMode.REVIEW, project_path=root)
+            plan = generator.create_plan(task)
+            proposal = generator.propose(task, root, plan=plan)
+            self.assertEqual(proposal.changed_files, ["snake.py"])
+
+    def test_multiple_markdown_fences_are_rejected(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            fenced = (
+                "```diff\n--- /dev/null\n+++ b/snake.py\n@@ -0,0 +1 @@\n+print('x')\n```\n"
+                "```text\nextra\n```"
+            )
+            generator = PatchGenerator(
+                SafetyPolicy(root),
+                ollama_provider=FakeOllamaProvider(fenced),  # type: ignore[arg-type]
+            )
+            task = Task.create("Create snake.py", mode=AgentMode.REVIEW, project_path=root)
             plan = generator.create_plan(task)
             with self.assertRaises(Exception):
                 generator.propose(task, root, plan=plan)
@@ -161,6 +192,25 @@ class PatchGeneratorTests(unittest.TestCase):
             proposal = generator.propose(task, root, plan=plan)
             self.assertEqual(proposal.patch, valid)
             self.assertEqual((root / "sample.py").read_text(encoding="utf-8"), "before\n")
+
+    def test_expected_plan_path_is_required_before_approval(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            wrong = "--- /dev/null\n+++ b/todolist.py\n@@ -0,0 +1 @@\n+print('wrong')\n"
+            valid = "--- /dev/null\n+++ b/todo.py\n@@ -0,0 +1 @@\n+print('right')\n"
+            generator = PatchGenerator(
+                SafetyPolicy(root),
+                ollama_provider=SequentialOllamaProvider([wrong, valid]),  # type: ignore[arg-type]
+            )
+            task = Task.create("Create todo.py", mode=AgentMode.REVIEW, project_path=root)
+            plan = generator.create_plan(task)
+            plan.risks.clear()
+            plan.risks.append(f"Expected files: {root / 'todo.py'}")
+
+            proposal = generator.propose(task, root, plan=plan)
+
+            self.assertEqual(proposal.changed_files, ["todo.py"])
+            self.assertFalse((root / "todo.py").exists())
 
 
 if __name__ == "__main__":
