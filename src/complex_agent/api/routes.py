@@ -1,28 +1,32 @@
 from __future__ import annotations
 
 import os
-import sqlite3
 from pathlib import Path
 from typing import Any
 
-from fastapi import APIRouter, HTTPException, Query, Request
+from fastapi import APIRouter, HTTPException, Query, Request, Response
 
 from complex_agent.api.schemas import (
     ApprovalRequestModel,
     ChatRequest,
+    ContinueTaskRequest,
     FileListResponse,
     FilePreviewResponse,
     GitDiffResponse,
     PlanRequest,
+    ProjectCreateRequest,
     ProjectResponse,
     ProjectSelectRequest,
+    RollbackRequest,
+    SettingsUpdateRequest,
     TimelineResponse,
     WorkspaceResponse,
 )
 from complex_agent.api.session_store import (
+    InvalidTransition,
+    RollbackConflict,
     SessionStore,
     parse_mode,
-    read_report,
     serialize_task_session,
 )
 from complex_agent.tools.base_tool import ToolContext
@@ -37,25 +41,70 @@ def create_router(store: SessionStore) -> APIRouter:
 
     @router.get("/api/status")
     def status() -> dict[str, Any]:
-        llm_status = store.patch_generator.llm_status()
+        llm_status = store.status_snapshot()
         return {
+            "project_id": store.active_project_id,
             "project_root": str(store.runtime.project_root),
-            "mode": "review",
+            "mode": store.default_mode,
             "tool_count": len(store.runtime.registry.list_tools()),
-            "agent_state_exists": (store.runtime.project_root / ".agent").exists(),
-            "latest_run": _latest_run_summary(store.runtime.project_root),
-            "llm_provider": llm_status["llm_provider"],
-            "ollama_base_url": llm_status["ollama_base_url"],
-            "ollama_model": llm_status["ollama_model"],
-            "ollama_reachable": llm_status["ollama_reachable"],
-            "ollama_generation_check": llm_status.get("ollama_generation_check", False),
-            "ollama_models": llm_status.get("ollama_models", []),
-            "fallback_provider": llm_status.get("fallback_provider", "deterministic"),
+            "agent_state_exists": False,
+            "latest_run": _latest_run_summary(store),
+            **llm_status,
         }
+
+    @router.post("/api/ollama/probe")
+    def probe_ollama() -> dict[str, object]:
+        return store.probe_ollama()
 
     @router.get("/api/tools")
     def tools() -> dict[str, Any]:
         return {"tools": store.runtime.registry.list_tool_info(include_all=True)}
+
+    @router.get("/api/projects")
+    def projects(
+        include_archived: bool = False,
+        search: str = Query(default="", max_length=200),
+    ) -> dict[str, Any]:
+        return {
+            "projects": [
+                _project_public(project, active_id=store.active_project_id)
+                for project in store.list_projects(include_archived=include_archived, search=search)
+            ]
+        }
+
+    @router.post("/api/projects")
+    def create_project(payload: ProjectCreateRequest) -> dict[str, Any]:
+        try:
+            store.select_project(payload.root_path, name=payload.name)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        project = store.app_store.get_project(store.active_project_id)
+        if project is None:
+            raise HTTPException(status_code=500, detail="Project was not persisted.")
+        return _project_public(project, active_id=store.active_project_id)
+
+    @router.get("/api/projects/{project_id}")
+    def get_project_by_id(project_id: str) -> dict[str, Any]:
+        project = store.app_store.get_project(project_id)
+        if project is None:
+            raise HTTPException(status_code=404, detail="Unknown project.")
+        return _project_public(project, active_id=store.active_project_id)
+
+    @router.post("/api/projects/{project_id}/open")
+    def open_project(project_id: str) -> dict[str, Any]:
+        try:
+            project = store.open_project(project_id)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        if project is None:
+            raise HTTPException(status_code=404, detail="Unknown project.")
+        return _project_public(project, active_id=store.active_project_id)
+
+    @router.post("/api/projects/{project_id}/archive")
+    def archive_project(project_id: str) -> dict[str, Any]:
+        if not store.archive_project(project_id):
+            raise HTTPException(status_code=404, detail="Unknown project.")
+        return {"project_id": project_id, "archived": True, "active_project_id": store.active_project_id}
 
     @router.get("/api/project", response_model=ProjectResponse)
     def get_project() -> dict[str, Any]:
@@ -101,8 +150,7 @@ def create_router(store: SessionStore) -> APIRouter:
             raise HTTPException(status_code=403, detail="File preview is not available.")
         content = store.runtime.safety.redact(result.content)
         max_chars = 20_000
-        truncated = len(content) > max_chars
-        return {"path": path, "content": content[:max_chars], "truncated": truncated}
+        return {"path": path, "content": content[:max_chars], "truncated": len(content) > max_chars}
 
     @router.get("/api/git/diff", response_model=GitDiffResponse)
     def git_diff() -> dict[str, Any]:
@@ -114,22 +162,51 @@ def create_router(store: SessionStore) -> APIRouter:
     def chat(payload: ChatRequest) -> dict[str, Any]:
         return store.chat(payload.message, session_id=payload.session_id, mode=parse_mode(payload.mode))
 
+    @router.get("/api/tasks")
+    def list_tasks(project_id: str | None = None) -> dict[str, Any]:
+        selected = project_id or store.active_project_id
+        if store.app_store.get_project(selected) is None:
+            raise HTTPException(status_code=404, detail="Unknown project.")
+        return {"project_id": selected, "tasks": store.list_tasks(selected)}
+
     @router.post("/api/tasks/plan")
     def plan(payload: PlanRequest) -> dict[str, Any]:
         _validate_project_path(payload.project_path, store.runtime.project_root)
-        task_session = store.create_plan(payload.task, mode=parse_mode(payload.mode))
+        if payload.project_id and store.app_store.get_project(payload.project_id) is None:
+            raise HTTPException(status_code=404, detail="Unknown project.")
+        task_session = store.create_plan(
+            payload.task,
+            mode=parse_mode(payload.mode),
+            project_id=payload.project_id,
+        )
         return serialize_task_session(task_session)
 
     @router.post("/api/tasks/{task_id}/propose")
     def propose(task_id: str) -> dict[str, Any]:
-        task_session = store.propose(task_id)
+        try:
+            task_session = store.propose(task_id)
+        except InvalidTransition as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        if task_session is None:
+            raise HTTPException(status_code=404, detail="Unknown task.")
+        return serialize_task_session(task_session)
+
+    @router.post("/api/tasks/{task_id}/propose-fix")
+    def propose_fix(task_id: str) -> dict[str, Any]:
+        try:
+            task_session = store.propose_fix(task_id)
+        except InvalidTransition as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
         if task_session is None:
             raise HTTPException(status_code=404, detail="Unknown task.")
         return serialize_task_session(task_session)
 
     @router.post("/api/tasks/{task_id}/run")
     def run(task_id: str) -> dict[str, Any]:
-        task_session = store.run_task(task_id)
+        try:
+            task_session = store.run_task(task_id)
+        except InvalidTransition as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
         if task_session is None:
             raise HTTPException(status_code=404, detail="Unknown task.")
         return serialize_task_session(task_session)
@@ -152,13 +229,49 @@ def create_router(store: SessionStore) -> APIRouter:
             raise HTTPException(status_code=404, detail="Unknown task.")
         return serialize_task_session(task_session)
 
+    @router.post("/api/tasks/{task_id}/repeat")
+    def repeat(task_id: str) -> dict[str, Any]:
+        task_session = store.repeat_task(task_id)
+        if task_session is None:
+            raise HTTPException(status_code=404, detail="Unknown task.")
+        return serialize_task_session(task_session)
+
+    @router.post("/api/tasks/{task_id}/continue")
+    def continue_task(task_id: str, payload: ContinueTaskRequest) -> dict[str, Any]:
+        try:
+            task_session = store.continue_task(task_id, payload.message)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        if task_session is None:
+            raise HTTPException(status_code=404, detail="Unknown task.")
+        return serialize_task_session(task_session)
+
+    @router.post("/api/tasks/{task_id}/rollback")
+    def rollback(task_id: str, payload: RollbackRequest) -> dict[str, Any]:
+        try:
+            task_session = store.rollback(
+                task_id, confirm_created_deletions=payload.confirm_created_deletions
+            )
+        except RollbackConflict as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        except InvalidTransition as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        if task_session is None:
+            raise HTTPException(status_code=404, detail="Unknown task.")
+        return serialize_task_session(task_session)
+
     @router.get("/api/tasks/{task_id}")
     def get_task(task_id: str) -> dict[str, Any]:
         task_session = store.get_task(task_id)
         if task_session is None:
             raise HTTPException(status_code=404, detail="Unknown task.")
-        task_session.pending_approvals = store.collect_pending_approvals(task_session)
         return serialize_task_session(task_session)
+
+    @router.get("/api/tasks/{task_id}/messages")
+    def get_messages(task_id: str) -> dict[str, Any]:
+        if store.app_store.get_task(task_id) is None:
+            raise HTTPException(status_code=404, detail="Unknown task.")
+        return {"task_id": task_id, "messages": store.app_store.list_messages(task_id)}
 
     @router.get("/api/tasks/{task_id}/events")
     def get_events(task_id: str) -> dict[str, Any]:
@@ -172,21 +285,15 @@ def create_router(store: SessionStore) -> APIRouter:
         task_session = store.get_task(task_id)
         if task_session is None:
             raise HTTPException(status_code=404, detail="Unknown task.")
-        events = []
-        if task_session.status:
-            events.append(
-                {
-                    "type": "task_status",
-                    "title": _event_title("task_status"),
-                    "status": task_session.status,
-                }
-            )
+        events: list[dict[str, Any]] = [
+            {"type": "task_status", "title": _event_title("task_status"), "status": task_session.status}
+        ]
         for event in task_session.events:
             event_type = str(event.get("type", "event"))
             events.append(
                 {
                     "type": event_type,
-                    "title": _event_title(event_type),
+                    "title": str(event.get("title") or _event_title(event_type)),
                     "step_id": event.get("step_id"),
                     "action": event.get("action"),
                     "status": event.get("status"),
@@ -199,24 +306,43 @@ def create_router(store: SessionStore) -> APIRouter:
         task_session = store.get_task(task_id)
         if task_session is None:
             raise HTTPException(status_code=404, detail="Unknown task.")
-        if task_session.final_report_text:
-            return {"report": task_session.final_report_text, "report_path": task_session.report_path}
-        return {"report": read_report(task_session.report_path), "report_path": task_session.report_path}
+        return {"report": task_session.final_report_text, "report_path": task_session.report_path}
 
     @router.get("/api/tasks/{task_id}/diff")
     def get_diff(task_id: str) -> dict[str, Any]:
         task_session = store.get_task(task_id)
         if task_session is None:
             raise HTTPException(status_code=404, detail="Unknown task.")
-        if task_session.proposed_patch:
-            return {"diff": task_session.proposed_patch}
-        diff = ""
-        if task_session.state:
-            for observation in task_session.state.observations:
-                if observation.source == "git_diff":
-                    diff = observation.content
-                    break
-        return {"diff": diff}
+        return {"diff": task_session.proposed_patch or "", "files": task_session.proposed_files}
+
+    @router.get("/api/settings")
+    def get_settings() -> dict[str, Any]:
+        return store.settings()
+
+    @router.post("/api/settings")
+    def update_settings(payload: SettingsUpdateRequest) -> dict[str, Any]:
+        try:
+            return store.update_settings(payload.model_dump(exclude_none=True))
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @router.post("/api/maintenance/cache/clear")
+    def clear_cache() -> dict[str, Any]:
+        store.clear_cache()
+        return {"cleared": True}
+
+    @router.get("/api/logs/export")
+    def export_logs() -> Response:
+        parts: list[str] = []
+        for path in sorted(store.app_store.paths.logs.glob("*.log")):
+            parts.append(f"===== {path.name} =====\n")
+            parts.append(store.runtime.safety.redact(path.read_text(encoding="utf-8", errors="replace")))
+        content = "\n".join(parts) if parts else "No application logs have been recorded.\n"
+        return Response(
+            content=content,
+            media_type="text/plain",
+            headers={"Content-Disposition": 'attachment; filename="complex-agent-logs.txt"'},
+        )
 
     @router.get("/")
     def index(request: Request):  # type: ignore[no-untyped-def]
@@ -225,25 +351,19 @@ def create_router(store: SessionStore) -> APIRouter:
     return router
 
 
-def _latest_run_summary(project_root: Path) -> dict[str, Any] | None:
-    db_path = project_root / ".agent" / "runs.sqlite3"
-    if not db_path.exists():
+def _latest_run_summary(store: SessionStore) -> dict[str, Any] | None:
+    tasks = store.list_tasks(store.active_project_id)
+    if not tasks:
         return None
-    conn = sqlite3.connect(db_path)
-    try:
-        row = conn.execute(
-            "SELECT id, mode, status, goal, summary FROM runs ORDER BY created_at DESC LIMIT 1"
-        ).fetchone()
-    finally:
-        conn.close()
-    if row is None:
-        return None
+    latest = tasks[0]
+    run = store.app_store.latest_run(str(latest["id"]))
     return {
-        "id": row[0],
-        "mode": row[1],
-        "status": row[2],
-        "goal": row[3],
-        "summary": row[4],
+        "id": latest["id"],
+        "mode": latest["mode"],
+        "goal": latest["title"],
+        "status": latest["status"],
+        "created_at": latest["created_at"],
+        "summary": run["status"] if run else "",
     }
 
 
@@ -255,12 +375,33 @@ def _validate_project_path(project_path: str | None, configured_root: Path) -> N
         raise HTTPException(status_code=400, detail="Use /api/project/select before planning in another folder.")
 
 
+def _project_public(project: dict[str, Any], *, active_id: str) -> dict[str, Any]:
+    return {
+        "id": project["id"],
+        "name": project["name"],
+        "root_path": project["root_path"],
+        "created_at": project["created_at"],
+        "updated_at": project["updated_at"],
+        "last_opened_at": project["last_opened_at"],
+        "is_archived": bool(project["is_archived"]),
+        "default_model": project["default_model"],
+        "default_mode": project["default_mode"],
+        "last_task_title": project.get("last_task_title"),
+        "is_active": project["id"] == active_id,
+    }
+
+
 def _project_response(store: SessionStore) -> dict[str, Any]:
     root = store.runtime.project_root
+    project = store.app_store.get_project(store.active_project_id) or {}
+    decision = store.project_guard.evaluate(root)
     return {
+        "id": store.active_project_id,
+        "name": project.get("name", root.name),
         "project_root": str(root),
         "exists": root.exists() and root.is_dir(),
         "writable": root.exists() and root.is_dir() and os.access(root, os.W_OK),
+        "warning": decision.warning,
     }
 
 
@@ -268,7 +409,7 @@ def _tool_context(store: SessionStore) -> ToolContext:
     return ToolContext(project_root=store.runtime.project_root, safety=store.runtime.safety)
 
 
-def _run_tool(store: SessionStore, name: str, data: dict[str, object]):
+def _run_tool(store: SessionStore, name: str, data: dict[str, object]):  # type: ignore[no-untyped-def]
     return store.runtime.registry.run(name, data, _tool_context(store))
 
 
@@ -316,15 +457,6 @@ def _git_branch(store: SessionStore) -> str | None:
 
 def _changed_files(store: SessionStore) -> list[dict[str, str]]:
     collected: dict[str, str] = {}
-    for task_session in store.task_sessions.values():
-        if not task_session.state:
-            continue
-        for path in task_session.state.changed_files:
-            if _safe_changed_path(store, path):
-                collected[path] = "modified"
-    if collected:
-        return [{"path": path, "status": status} for path, status in sorted(collected.items())]
-
     result = _run_tool(store, "git_status", {})
     if not result.success:
         return []
@@ -372,37 +504,13 @@ def _event_title(event_type: str) -> str:
         "approval_rejected": "Действие отклонено",
         "task_started": "Задача запущена",
         "task_finished": "Задача завершена",
-        "step_started": "Шаг запущен",
-        "step_finished": "Шаг завершён",
-        "tool_called": "Инструмент вызван",
-        "tool_finished": "Инструмент завершён",
         "llm_unavailable": "Ollama недоступен",
         "patch_proposed": "Предложены изменения",
         "patch_applied": "Patch применён",
         "patch_failed": "Patch не применён",
         "verification_finished": "Проверка завершена",
         "proposal_failed": "Не удалось предложить изменения",
-    }
-    return titles.get(event_type, event_type)
-
-
-def _event_title(event_type: str) -> str:  # type: ignore[no-redef]
-    titles = {
-        "task_status": "Состояние задачи",
-        "pending_approval": "Ожидается подтверждение",
-        "approval_granted": "Действие подтверждено",
-        "approval_rejected": "Действие отклонено",
-        "task_started": "Задача запущена",
-        "task_finished": "Задача завершена",
-        "step_started": "Шаг запущен",
-        "step_finished": "Шаг завершён",
-        "tool_called": "Инструмент вызван",
-        "tool_finished": "Инструмент завершён",
-        "llm_unavailable": "Ollama недоступен",
-        "patch_proposed": "Предложены изменения",
-        "patch_applied": "Patch применён",
-        "patch_failed": "Patch не применён",
-        "verification_finished": "Проверка завершена",
-        "proposal_failed": "Не удалось предложить изменения",
+        "rollback_completed": "Изменения откачены",
+        "task_continued": "Задача продолжена",
     }
     return titles.get(event_type, event_type)

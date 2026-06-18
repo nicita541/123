@@ -14,7 +14,8 @@ class ListFilesTool(BaseTool):
 
     def run(self, data: dict[str, object], context: ToolContext) -> ToolResult:
         pattern = str(data.get("pattern", "*"))
-        limit = int(data.get("limit", 200))
+        raw_limit = data.get("limit", 200)
+        limit = int(raw_limit) if isinstance(raw_limit, (int, str)) else 200
         root = context.project_root / str(data.get("path", "."))
         root = root.resolve()
         allowed, reason = context.safety.file_guard.validate_read(root)
@@ -39,4 +40,3 @@ def _relative(path: Path, root: Path) -> str:
         return path.relative_to(root).as_posix()
     except ValueError:
         return path.as_posix()
-

@@ -81,24 +81,24 @@ class PatchGenerator:
 
     def propose(self, task: Task, project_root: Path, *, plan: Plan | None = None) -> ProposedPatch:
         if self.supports(task.normalized_goal):
-            proposal = self._calculator.propose(task, project_root)
-            self.validate_patch(proposal.patch)
+            calculator_proposal = self._calculator.propose(task, project_root)
+            self.validate_patch(calculator_proposal.patch)
             return ProposedPatch(
                 skill_name=self._calculator.name,
-                patch=proposal.patch,
-                changed_files=proposal.changed_files,
-                summary=proposal.summary,
+                patch=calculator_proposal.patch,
+                changed_files=calculator_proposal.changed_files,
+                summary=calculator_proposal.summary,
             )
-        proposal = self._ollama_patch_generator.propose(
+        ollama_proposal = self._ollama_patch_generator.propose(
             task_text=task.normalized_goal,
             plan=plan,
             project_root=project_root,
         )
         return ProposedPatch(
             skill_name="ollama",
-            patch=proposal.patch,
-            changed_files=proposal.changed_files,
-            summary=proposal.summary,
+            patch=ollama_proposal.patch,
+            changed_files=ollama_proposal.changed_files,
+            summary=ollama_proposal.summary,
         )
 
     def validate_patch(self, patch: str) -> None:

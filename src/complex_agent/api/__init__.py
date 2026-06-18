@@ -1,2 +1,1 @@
-"""Future API layer."""
-
+"""FastAPI application and persistent task workflow."""

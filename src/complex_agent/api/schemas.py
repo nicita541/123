@@ -15,6 +15,7 @@ class PlanRequest(BaseModel):
     task: str
     mode: str = "review"
     project_path: str | None = None
+    project_id: str | None = None
 
 
 class ApprovalRequestModel(BaseModel):
@@ -26,10 +27,34 @@ class ProjectSelectRequest(BaseModel):
     path: str
 
 
+class ProjectCreateRequest(BaseModel):
+    root_path: str
+    name: str | None = None
+
+
+class ContinueTaskRequest(BaseModel):
+    message: str = Field(min_length=1)
+
+
+class RollbackRequest(BaseModel):
+    confirm_created_deletions: bool = False
+
+
+class SettingsUpdateRequest(BaseModel):
+    ollama_base_url: str | None = None
+    selected_model: str | None = None
+    default_access_mode: str | None = None
+    max_fix_iterations: int | None = None
+    ui_preferences: dict[str, Any] | None = None
+
+
 class ProjectResponse(BaseModel):
+    id: str | None = None
+    name: str | None = None
     project_root: str
     exists: bool = True
     writable: bool = True
+    warning: str | None = None
 
 
 class WorkspaceFile(BaseModel):

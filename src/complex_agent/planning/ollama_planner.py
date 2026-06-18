@@ -10,6 +10,7 @@ from complex_agent.llm.ollama_provider import OllamaError, OllamaProvider
 from complex_agent.planning.plan import Plan
 from complex_agent.planning.plan_step import PlanStep
 from complex_agent.safety.safety_policy import SafetyPolicy
+from complex_agent.safety.command_guard import parse_command_argv
 
 
 ALLOWED_PLAN_TOOLS = {"read_file", "apply_patch", "shell", "final_report"}
@@ -89,7 +90,7 @@ class OllamaPlanner:
                     type="verification",
                     description=f"Run safe verification: {command}",
                     required_tool="shell",
-                    input={"command": command},
+                    input={"argv": parse_command_argv(command)},
                     risk_level=RiskLevel.MEDIUM,
                 )
             )

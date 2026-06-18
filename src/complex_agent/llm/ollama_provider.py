@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable
 
-import yaml
+import yaml  # type: ignore[import-untyped]
 
 from complex_agent.llm.provider import Provider
 
@@ -75,7 +75,10 @@ class OllamaProvider(Provider):
             full_prompt += json.dumps(schema_hint, ensure_ascii=False, indent=2)
         text = self.complete(full_prompt).strip()
         try:
-            return json.loads(_extract_json(text))
+            parsed = json.loads(_extract_json(text))
+            if isinstance(parsed, (dict, str)):
+                return parsed
+            raise OllamaError("Ollama structured response must be a JSON object or string.")
         except json.JSONDecodeError as exc:
             raise OllamaError(f"Ollama returned invalid JSON: {exc}") from exc
 
@@ -136,6 +139,8 @@ class OllamaProvider(Provider):
             parsed = json.loads(raw)
         except json.JSONDecodeError as exc:
             raise OllamaError(f"Ollama returned invalid JSON: {exc}") from exc
+        if not isinstance(parsed, dict):
+            raise OllamaError("Ollama returned a JSON value that is not an object.")
         if "error" in parsed:
             raise OllamaError(f"Ollama error: {parsed['error']}")
         return parsed

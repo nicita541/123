@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import re
 from dataclasses import dataclass
 from pathlib import Path
@@ -25,6 +26,13 @@ class _FilePatch:
     hunks: list[_Hunk]
 
 
+@dataclass(slots=True)
+class _PreparedPatch:
+    relative_path: str
+    target: Path
+    content: str
+
+
 class ApplyPatchTool(BaseTool):
     name = "apply_patch"
     description = "Apply a small unified diff to files inside the project root."
@@ -38,7 +46,8 @@ class ApplyPatchTool(BaseTool):
             return ToolResult(False, "", error="Patch exceeds max size.")
         try:
             file_patches = _parse_unified_diff(patch)
-            changed = [_apply_file_patch(file_patch, context) for file_patch in file_patches]
+            prepared = [_prepare_file_patch(file_patch, context) for file_patch in file_patches]
+            changed = [_write_prepared_patch(item) for item in prepared]
         except Exception as exc:  # noqa: BLE001 - tool must return structured errors
             return ToolResult(False, "", error=str(exc))
         return ToolResult(
@@ -47,6 +56,13 @@ class ApplyPatchTool(BaseTool):
             summary=f"Applied patch to {len(changed)} files.",
             changed_files=changed,
         )
+
+
+def validate_patch_dry_run(patch: str, context: ToolContext) -> list[str]:
+    """Parse and compute every target without writing project files."""
+
+    file_patches = _parse_unified_diff(patch)
+    return [_prepare_file_patch(file_patch, context).relative_path for file_patch in file_patches]
 
 
 def _parse_unified_diff(patch: str) -> list[_FilePatch]:
@@ -96,7 +112,7 @@ def _clean_path(path: str) -> str:
     return path
 
 
-def _apply_file_patch(file_patch: _FilePatch, context: ToolContext) -> str:
+def _prepare_file_patch(file_patch: _FilePatch, context: ToolContext) -> _PreparedPatch:
     target_path = file_patch.new_path if file_patch.new_path != "/dev/null" else file_patch.old_path
     if target_path == "/dev/null":
         raise ValueError("Deleting files is not supported by the MVP patch tool.")
@@ -106,9 +122,17 @@ def _apply_file_patch(file_patch: _FilePatch, context: ToolContext) -> str:
         raise ValueError(reason)
     original = path.read_text(encoding="utf-8", errors="replace").splitlines() if path.exists() else []
     updated = _apply_hunks(original, file_patch.hunks)
+    content = "\n".join(updated) + ("\n" if updated else "")
+    return _PreparedPatch(path.relative_to(context.project_root).as_posix(), path, content)
+
+
+def _write_prepared_patch(prepared: _PreparedPatch) -> str:
+    path = prepared.target
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text("\n".join(updated) + ("\n" if updated else ""), encoding="utf-8")
-    return path.relative_to(context.project_root).as_posix()
+    temporary = path.with_name(f".{path.name}.complex-agent.tmp")
+    temporary.write_text(prepared.content, encoding="utf-8")
+    os.replace(temporary, path)
+    return prepared.relative_path
 
 
 def _apply_hunks(original: list[str], hunks: list[_Hunk]) -> list[str]:
@@ -142,4 +166,3 @@ def _apply_hunks(original: list[str], hunks: list[_Hunk]) -> list[str]:
                 raise ValueError(f"Unsupported patch line: {line}")
     result.extend(original[cursor:])
     return result
-

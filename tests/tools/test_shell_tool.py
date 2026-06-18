@@ -11,10 +11,12 @@ from complex_agent.tools.shell.shell_tool import ShellTool
 class ShellToolTests(unittest.TestCase):
     def test_shell_blocks_unallowlisted_command(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
-            result = ShellTool().run({"command": "echo hello"}, ToolContext(__import__("pathlib").Path(temp), SafetyPolicy(temp)))
+            result = ShellTool().run(
+                {"argv": ["echo", "hello"]},
+                ToolContext(__import__("pathlib").Path(temp), SafetyPolicy(temp)),
+            )
             self.assertFalse(result.success)
 
 
 if __name__ == "__main__":
     unittest.main()
-

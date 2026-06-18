@@ -71,7 +71,7 @@ class ApiTests(unittest.TestCase):
             response = client.get("/api/tools")
             self.assertEqual(response.status_code, 200)
             statuses = {tool["name"]: tool["status"] for tool in response.json()["tools"]}
-            self.assertEqual(statuses["git_commit"], "disabled")
+            self.assertNotIn("git_commit", statuses)
             self.assertEqual(statuses["final_report"], "internal")
             self.assertEqual(statuses["read_file"], "enabled")
 
@@ -452,7 +452,7 @@ class ApiTests(unittest.TestCase):
             run_response = client.post(f"/api/tasks/{task_id}/run")
             self.assertEqual(run_response.status_code, 200)
             data = run_response.json()
-            self.assertEqual(data["status"], "pending_approval")
+            self.assertEqual(data["status"], "waiting_approval")
             self.assertTrue(data["pending_approvals"])
             self.assertEqual((root / "sample.txt").read_text(encoding="utf-8"), "before\n")
 

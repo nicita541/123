@@ -18,6 +18,7 @@ from complex_agent.review.final_report_builder import FinalReportBuilder
 from complex_agent.safety.approval_gate import ApprovalGate
 from complex_agent.safety.safety_policy import SafetyPolicy
 from complex_agent.storage.artifact_store import ArtifactStore
+from complex_agent.storage.app_paths import AppPaths
 from complex_agent.storage.run_store import RunStore
 from complex_agent.storage.sqlite_store import SQLiteStore
 from complex_agent.tools.base_tool import ToolContext
@@ -33,6 +34,7 @@ class AgentRuntime:
         auto_approve: bool = False,
         storage_path: str | Path | None = None,
         artifact_path: str | Path | None = None,
+        app_data_path: str | Path | None = None,
     ) -> None:
         self.project_root = Path(project_path).expanduser().resolve()
         self.approval_gate = ApprovalGate(auto_approve=auto_approve)
@@ -46,8 +48,10 @@ class AgentRuntime:
         self.audit_log = AuditLog()
         self.event_bus = EventBus()
         self.event_bus.subscribe(audit_subscriber(self.audit_log))
-        self._storage_path = Path(storage_path or self.project_root / ".agent" / "runs.sqlite3")
-        self._artifact_path = Path(artifact_path or self.project_root / ".agent" / "artifacts")
+        app_paths = AppPaths.resolve(app_data_path)
+        app_paths.ensure()
+        self._storage_path = Path(storage_path or app_paths.cache / "runtime.sqlite3")
+        self._artifact_path = Path(artifact_path or app_paths.artifacts / "reports")
         self._sqlite: SQLiteStore | None = None
         self._run_store: RunStore | None = None
         self._artifacts: ArtifactStore | None = None

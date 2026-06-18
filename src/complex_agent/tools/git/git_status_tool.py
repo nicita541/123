@@ -8,10 +8,10 @@ from complex_agent.tools.tool_result import ToolResult
 class GitStatusTool(ShellTool):
     name = "git_status"
     description = "Run git status --short."
-    required_keys = ()
+    required_keys: tuple[str, ...] = ()
 
     def run(self, data: dict[str, object], context: ToolContext) -> ToolResult:
-        result = super().run({"command": "git status --short"}, context)
+        result = super().run({"argv": ["git", "status", "--short"]}, context)
         if not result.success and "not a git repository" in result.content.lower():
             return ToolResult(True, "", summary="Not a git repository; skipped git status.")
         return result

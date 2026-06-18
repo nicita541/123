@@ -30,7 +30,9 @@ class DockerFilesTests(unittest.TestCase):
         self.assertIn("agent-app:", text)
         self.assertIn('"8765:8765"', text)
         self.assertIn("AGENT_PROJECT_ROOT: /workspace", text)
-        self.assertIn("${AGENT_WORKSPACE:-./examples/demo_project}:/workspace", text)
+        self.assertIn("${AGENT_WORKSPACE:-./examples/docker_workspace}:/workspace", text)
+        self.assertIn("COMPLEX_AGENT_DATA_DIR: /data", text)
+        self.assertIn("agent-data:/data", text)
         self.assertIn("http://host.docker.internal:11434", text)
         self.assertNotIn("/:/workspace", text)
 

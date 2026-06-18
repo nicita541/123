@@ -10,4 +10,5 @@ build/
 *.egg-info/
 .env
 .agent/
-
+examples/docker_workspace/*
+!examples/docker_workspace/.gitkeep

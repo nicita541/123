@@ -8,10 +8,10 @@ from complex_agent.tools.tool_result import ToolResult
 class GitDiffTool(ShellTool):
     name = "git_diff"
     description = "Run git diff -- ."
-    required_keys = ()
+    required_keys: tuple[str, ...] = ()
 
     def run(self, data: dict[str, object], context: ToolContext) -> ToolResult:
-        result = super().run({"command": "git diff -- ."}, context)
+        result = super().run({"argv": ["git", "diff", "--", "."]}, context)
         if not result.success and "not a git repository" in result.content.lower():
             return ToolResult(True, "", summary="Not a git repository; skipped git diff.")
         return result

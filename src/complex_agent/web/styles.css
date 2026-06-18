@@ -164,6 +164,121 @@ button:disabled {
   background: transparent;
 }
 
+.sidebar-search {
+  width: 100%;
+  margin: 0 0 10px;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: #11151c;
+  color: var(--text);
+}
+
+.project-list,
+.history-list ul {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+}
+
+.project-list-item,
+.history-list button {
+  width: 100%;
+  padding: 8px 10px;
+  margin-bottom: 4px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--text);
+  text-align: left;
+  cursor: pointer;
+}
+
+.project-list-item:hover,
+.project-list-item.active,
+.history-list button:hover {
+  background: rgba(93, 135, 255, 0.14);
+}
+
+.project-list-item strong,
+.project-list-item small,
+.history-list button span,
+.history-list button small {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.project-list-item small,
+.history-list button small {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.history-list section h3 {
+  margin: 12px 8px 5px;
+  color: var(--muted);
+  font-size: 11px;
+  text-transform: uppercase;
+}
+
+.mini-button.danger,
+.card-action.danger {
+  color: #ff9d9d;
+  border-color: rgba(255, 92, 92, 0.45);
+}
+
+.settings-dialog {
+  width: min(560px, calc(100vw - 40px));
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background: #171b23;
+  color: var(--text);
+  box-shadow: 0 24px 80px rgba(0, 0, 0, 0.5);
+}
+
+.settings-dialog::backdrop {
+  background: rgba(0, 0, 0, 0.68);
+}
+
+.settings-dialog header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.settings-dialog header button {
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  font-size: 24px;
+}
+
+.settings-dialog label {
+  display: grid;
+  gap: 6px;
+  margin: 14px 0;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.settings-dialog input,
+.settings-dialog select {
+  padding: 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: #10141b;
+  color: var(--text);
+}
+
+.settings-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 20px;
+}
+
 .nav-item.active {
   background: #2a2a2a;
 }

@@ -5,6 +5,7 @@ import unittest
 from contextlib import redirect_stdout
 from io import StringIO
 from pathlib import Path
+from unittest.mock import patch
 
 from complex_agent.ui.cli import main
 from complex_agent.ui.cli import build_parser, create_serve_app
@@ -23,19 +24,19 @@ class CliTests(unittest.TestCase):
                 code = main(["--project", temp, "tools"])
             self.assertEqual(code, 0)
             lines = output.getvalue().splitlines()
-            self.assertIn("disabled\tgit_commit\tDisabled in MVP; auto-commit is out of scope.", lines)
+            self.assertFalse(any("git_commit" in line for line in lines))
             self.assertIn(
                 "internal\tfinal_report\tReturn a simple report placeholder for tool-only final steps.",
                 lines,
             )
-            self.assertNotIn("git_commit", lines)
             self.assertNotIn("final_report", lines)
 
     def test_plan_command(self) -> None:
-        with tempfile.TemporaryDirectory() as temp:
+        with tempfile.TemporaryDirectory() as temp, tempfile.TemporaryDirectory() as app_data:
             Path(temp, "pyproject.toml").write_text("[project]\nname='x'\n", encoding="utf-8")
-            code = main(["--project", temp, "plan", "Audit"])
-            self.assertEqual(code, 0)
+            with patch.dict("os.environ", {"OLLAMA_BASE_URL": "http://127.0.0.1:1"}):
+                code = main(["--project", temp, "--app-data", app_data, "plan", "Audit"])
+            self.assertEqual(code, 1)
 
     def test_read_only_commands_do_not_create_agent_state(self) -> None:
         read_only_commands = [
@@ -47,18 +48,22 @@ class CliTests(unittest.TestCase):
         for command in read_only_commands:
             with self.subTest(command=command):
                 with tempfile.TemporaryDirectory() as temp:
-                    code = main(["--project", temp, *command])
-                    self.assertEqual(code, 0)
+                    with tempfile.TemporaryDirectory() as app_data:
+                        with patch.dict("os.environ", {"OLLAMA_BASE_URL": "http://127.0.0.1:1"}):
+                            code = main(["--project", temp, "--app-data", app_data, *command])
+                    self.assertEqual(code, 1 if command[0] == "plan" else 0)
                     self.assertFalse(Path(temp, ".agent").exists())
 
-    def test_audit_creates_run_history_and_artifacts(self) -> None:
-        with tempfile.TemporaryDirectory() as temp:
+    def test_audit_persists_failed_ollama_task_outside_project(self) -> None:
+        with tempfile.TemporaryDirectory() as temp, tempfile.TemporaryDirectory() as app_data:
             Path(temp, "sample.py").write_text("# TODO: demo\n", encoding="utf-8")
-            code = main(["--project", temp, "audit", "Audit this project"])
-            self.assertEqual(code, 0)
-            self.assertTrue(Path(temp, ".agent", "runs.sqlite3").exists())
-            artifacts = list(Path(temp, ".agent", "artifacts").glob("*.md"))
-            self.assertTrue(artifacts)
+            with patch.dict("os.environ", {"OLLAMA_BASE_URL": "http://127.0.0.1:1"}):
+                code = main(
+                    ["--project", temp, "--app-data", app_data, "audit", "Audit this project"]
+                )
+            self.assertEqual(code, 1)
+            self.assertTrue(Path(app_data, "app.sqlite3").exists())
+            self.assertFalse(Path(temp, ".agent").exists())
 
     def test_serve_command_is_registered(self) -> None:
         parser = build_parser()

@@ -6,6 +6,8 @@ from pathlib import Path
 from complex_agent.llm.ollama_provider import OllamaError, OllamaProvider
 from complex_agent.planning.plan import Plan
 from complex_agent.safety.safety_policy import SafetyPolicy
+from complex_agent.tools.base_tool import ToolContext
+from complex_agent.tools.filesystem.patch_tool import validate_patch_dry_run
 
 
 @dataclass(frozen=True, slots=True)
@@ -31,6 +33,10 @@ class OllamaPatchGenerator:
                 text = self.provider.complete(prompt).strip()
                 patch = self.extract_diff(text)
                 self.validate_patch(patch)
+                validate_patch_dry_run(
+                    patch,
+                    ToolContext(project_root=project_root, safety=self.safety),
+                )
                 return OllamaPatch(
                     patch=patch,
                     changed_files=extract_patch_paths(patch),

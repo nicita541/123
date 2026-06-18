@@ -16,7 +16,8 @@ class SearchFilesTool(BaseTool):
     def run(self, data: dict[str, object], context: ToolContext) -> ToolResult:
         query = str(data["query"])
         glob = str(data.get("glob", "*"))
-        limit = int(data.get("limit", 200))
+        raw_limit = data.get("limit", 200)
+        limit = int(raw_limit) if isinstance(raw_limit, (int, str)) else 200
         return self._run_python(query, glob, limit, context)
 
     def _run_python(self, query: str, glob: str, limit: int, context: ToolContext) -> ToolResult:

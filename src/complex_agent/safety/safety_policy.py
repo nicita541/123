@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Sequence
 
 from complex_agent.core.modes import AgentMode
 from complex_agent.safety.approval_gate import ApprovalGate, ApprovalRequest
@@ -45,7 +46,7 @@ class SafetyPolicy:
         requires_approval = mode in {AgentMode.REVIEW, AgentMode.DEV, AgentMode.AUTO}
         return SafetyDecision(True, requires_approval=requires_approval, reason=reason)
 
-    def check_command(self, command: str) -> CommandDecision:
+    def check_command(self, command: str | Sequence[str]) -> CommandDecision:
         return self.command_guard.evaluate(command)
 
     def approve_if_needed(

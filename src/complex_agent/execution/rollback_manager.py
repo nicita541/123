@@ -1,10 +1,6 @@
-from __future__ import annotations
+"""Compatibility exports for the implemented snapshot/rollback subsystem."""
 
+from complex_agent.execution.snapshot_manager import SnapshotManager
+from complex_agent.tools.filesystem.rollback_tool import RollbackTool
 
-class RollbackManager:
-    def create_checkpoint(self) -> None:
-        return None
-
-    def rollback(self) -> None:
-        raise NotImplementedError("Rollback is not implemented in MVP.")
-
+__all__ = ["RollbackTool", "SnapshotManager"]

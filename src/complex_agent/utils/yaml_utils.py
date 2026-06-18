@@ -9,7 +9,7 @@ def load_yaml(path: str | Path) -> dict[str, Any]:
 
     text = Path(path).read_text(encoding="utf-8")
     try:
-        import yaml  # type: ignore[import-not-found]
+        import yaml  # type: ignore[import-untyped]
 
         data = yaml.safe_load(text)
         return data or {}
@@ -45,4 +45,3 @@ def _coerce(value: str) -> Any:
         return int(value)
     except ValueError:
         return value.strip('"').strip("'")
-

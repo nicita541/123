@@ -10,16 +10,23 @@ from fastapi.staticfiles import StaticFiles
 from complex_agent.api.routes import create_router
 from complex_agent.api.session_store import SessionStore
 from complex_agent.app import AgentRuntime
+from complex_agent.storage.app_store import AppStore
 
 
-def create_app(project_path: str | Path = ".", host: str = "127.0.0.1") -> FastAPI:
+def create_app(
+    project_path: str | Path = ".",
+    host: str = "127.0.0.1",
+    app_data_path: str | Path | None = None,
+) -> FastAPI:
     project_root = Path(project_path).expanduser().resolve()
-    runtime = AgentRuntime(project_path=project_root)
-    store = SessionStore(runtime)
+    app_store = AppStore(app_data_path)
+    runtime = AgentRuntime(project_path=project_root, app_data_path=app_store.paths.root)
+    store = SessionStore(runtime, app_store)
     web_root = Path(__file__).resolve().parents[1] / "web"
 
     app = FastAPI(title="Complex AI Coding Agent Local App", version="0.2.0")
     app.state.session_store = store
+    app.state.app_store = app_store
     app.state.project_root = project_root
     app.state.web_root = web_root
     app.state.index_response = lambda: FileResponse(web_root / "index.html")
@@ -43,4 +50,3 @@ def _local_origins(host: str) -> list[str]:
         "http://localhost:8765",
         f"http://{host}:8765",
     ]
-

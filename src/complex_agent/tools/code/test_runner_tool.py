@@ -8,7 +8,8 @@ from complex_agent.tools.tool_result import ToolResult
 class TestRunnerTool(ShellTool):
     name = "test_runner"
     description = "Run a safe test command."
-    required_keys = ()
+    required_keys: tuple[str, ...] = ()
 
     def run(self, data: dict[str, object], context: ToolContext) -> ToolResult:
-        return super().run({"command": str(data.get("command") or "python -m pytest")}, context)
+        argv = data.get("argv") or ["python", "-m", "pytest"]
+        return super().run({"argv": argv}, context)

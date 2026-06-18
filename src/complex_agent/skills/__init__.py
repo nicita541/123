@@ -1,2 +1,1 @@
-"""Reusable workflow placeholders."""
-
+"""Built-in, explicitly enabled workflow helpers."""

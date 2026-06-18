@@ -13,7 +13,8 @@ class ProjectScanTool(BaseTool):
     risk_level = RiskLevel.LOW
 
     def run(self, data: dict[str, object], context: ToolContext) -> ToolResult:
-        limit = int(data.get("limit", 500))
+        raw_limit = data.get("limit", 500)
+        limit = int(raw_limit) if isinstance(raw_limit, (int, str)) else 500
         files: list[str] = []
         suffixes: Counter[str] = Counter()
         stack_hints: set[str] = set()
@@ -54,4 +55,3 @@ class ProjectScanTool(BaseTool):
             summary=f"Scanned {len(files)} files.",
             metadata={"files_scanned": len(files), "stack_hints": sorted(stack_hints)},
         )
-

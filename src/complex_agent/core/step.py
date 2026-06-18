@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
 
@@ -19,4 +19,3 @@ class Step:
     error: str | None = None
     started_at: datetime | None = None
     finished_at: datetime | None = None
-

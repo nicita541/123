@@ -10,7 +10,6 @@ from complex_agent.tools.filesystem.patch_tool import ApplyPatchTool
 from complex_agent.tools.filesystem.read_file_tool import ReadFileTool
 from complex_agent.tools.filesystem.search_files_tool import SearchFilesTool
 from complex_agent.tools.git.git_branch_tool import GitBranchTool
-from complex_agent.tools.git.git_commit_tool import GitCommitTool
 from complex_agent.tools.git.git_diff_tool import GitDiffTool
 from complex_agent.tools.git.git_status_tool import GitStatusTool
 from complex_agent.tools.project.build_tool import BuildTool
@@ -33,7 +32,6 @@ def create_default_registry() -> ToolRegistry:
         GitStatusTool(),
         GitDiffTool(),
         GitBranchTool(),
-        GitCommitTool(),
         ProjectScanTool(),
         DependencyTool(),
         BuildTool(),
@@ -45,4 +43,3 @@ def create_default_registry() -> ToolRegistry:
     ]:
         registry.register(tool)
     return registry
-

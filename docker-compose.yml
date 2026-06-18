@@ -7,10 +7,14 @@ services:
       - "8765:8765"
     environment:
       AGENT_PROJECT_ROOT: /workspace
+      COMPLEX_AGENT_DATA_DIR: /data
       OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-http://host.docker.internal:11434}
       OLLAMA_MODEL: ${OLLAMA_MODEL:-qwen2.5-coder:7b-instruct}
     volumes:
-      - ${AGENT_WORKSPACE:-./examples/demo_project}:/workspace
+      - ${AGENT_WORKSPACE:-./examples/docker_workspace}:/workspace
+      - agent-data:/data
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     command:
       - python
       - -m
@@ -34,3 +38,4 @@ services:
 
 volumes:
   ollama-data:
+  agent-data:

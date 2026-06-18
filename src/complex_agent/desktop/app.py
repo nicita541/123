@@ -20,6 +20,20 @@ WINDOW_MIN_WIDTH = 1100
 WINDOW_MIN_HEIGHT = 720
 
 
+class DesktopBridge:
+    def __init__(self, webview: Any) -> None:
+        self.webview = webview
+
+    def choose_project(self) -> str | None:
+        windows = getattr(self.webview, "windows", [])
+        if not windows:
+            return None
+        result = windows[0].create_file_dialog(self.webview.FOLDER_DIALOG)
+        if not result:
+            return None
+        return str(result[0])
+
+
 def find_free_port(host: str = DEFAULT_HOST) -> int:
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
         sock.bind((host, 0))
@@ -52,6 +66,7 @@ def run_desktop_app(
             width=WINDOW_WIDTH,
             height=WINDOW_HEIGHT,
             min_size=(WINDOW_MIN_WIDTH, WINDOW_MIN_HEIGHT),
+            js_api=DesktopBridge(webview),
         )
         webview.start()
         _ = window
@@ -62,7 +77,7 @@ def run_desktop_app(
 
 def _load_webview() -> Any:
     try:
-        import webview  # type: ignore[import-not-found]
+        import webview
     except ImportError as exc:
         raise RuntimeError(
             'Desktop mode requires pywebview. Install with: pip install -e ".[desktop]"'

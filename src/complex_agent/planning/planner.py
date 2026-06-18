@@ -72,7 +72,7 @@ class Planner:
                     type="verify",
                     description="Run the configured safe test command if available.",
                     required_tool="shell",
-                    input={"command": "python -m pytest"},
+                    input={"argv": ["python", "-m", "pytest"]},
                     risk_level=RiskLevel.MEDIUM,
                     approval_required=task.mode == AgentMode.DEV,
                 )
@@ -90,4 +90,3 @@ class Planner:
         if context and context.items:
             plan.risks.append("Context was summarized; inspect relevant files before mutation.")
         return plan
-

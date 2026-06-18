@@ -8,7 +8,8 @@ from complex_agent.tools.tool_result import ToolResult
 class LintTool(ShellTool):
     name = "lint"
     description = "Run a safe lint command."
-    required_keys = ()
+    required_keys: tuple[str, ...] = ()
 
     def run(self, data: dict[str, object], context: ToolContext) -> ToolResult:
-        return super().run({"command": str(data.get("command") or "ruff check .")}, context)
+        argv = data.get("argv") or ["ruff", "check", "."]
+        return super().run({"argv": argv}, context)

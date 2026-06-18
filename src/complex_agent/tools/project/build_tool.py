@@ -8,8 +8,8 @@ from complex_agent.tools.tool_result import ToolResult
 class BuildTool(ShellTool):
     name = "build"
     description = "Run a safe build command."
-    required_keys = ()
+    required_keys: tuple[str, ...] = ()
 
     def run(self, data: dict[str, object], context: ToolContext) -> ToolResult:
-        command = str(data.get("command") or "dotnet build")
-        return super().run({"command": command, "timeout": data.get("timeout", 120)}, context)
+        argv = data.get("argv") or ["dotnet", "build"]
+        return super().run({"argv": argv, "timeout": data.get("timeout", 120)}, context)

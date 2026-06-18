@@ -20,20 +20,18 @@
 
       <button id="newChatBtn" class="sidebar-primary" type="button">Новый чат</button>
 
-      <nav class="sidebar-nav" aria-label="Навигация">
-        <button class="nav-item active" type="button">Новый чат</button>
-        <button class="nav-item" type="button">Поиск</button>
-        <button class="nav-item" type="button">Инструменты</button>
-        <button class="nav-item" type="button">Автоматизации</button>
-        <button class="nav-item" type="button">Мобильный агент</button>
-      </nav>
-
       <section class="sidebar-section">
         <h2>Проекты</h2>
+        <input id="projectSearch" class="sidebar-search" type="search" placeholder="Поиск проектов" />
+        <ul id="projectList" class="project-list"></ul>
         <div class="project-card">
           <strong id="projectName">aiAgent</strong>
           <span id="projectPath">F:\aiAgent</span>
-          <button id="chooseProjectBtn" class="mini-button" type="button">Выбрать папку</button>
+          <div class="inline-actions">
+            <button id="chooseProjectBtn" class="mini-button" type="button">Добавить проект</button>
+            <button id="openFolderBtn" class="mini-button" type="button" title="Выбрать папку">Открыть папку</button>
+            <button id="archiveProjectBtn" class="mini-button danger" type="button">Архивировать</button>
+          </div>
         </div>
         <form id="projectForm" class="project-form" hidden>
           <label for="projectInput">Путь к папке</label>
@@ -47,9 +45,8 @@
 
       <section class="sidebar-section">
         <h2>История</h2>
-        <ul id="taskHistory" class="history-list">
-          <li>Задач пока нет</li>
-        </ul>
+        <input id="taskSearch" class="sidebar-search" type="search" placeholder="Поиск задач" />
+        <div id="taskHistory" class="history-list"><p>Задач пока нет</p></div>
       </section>
 
       <button id="settingsBtn" class="settings-link" type="button">Настройки</button>
@@ -80,6 +77,10 @@
         </div>
         <dl class="env-list">
           <div>
+            <dt>Задача</dt>
+            <dd id="envTaskStatus">нет</dd>
+          </div>
+          <div>
             <dt>Изменения</dt>
             <dd id="envChanges">0 файлов</dd>
           </div>
@@ -109,6 +110,10 @@
           </div>
         </dl>
         <div class="env-block">
+          <h3>Изменённые файлы</h3>
+          <ul id="envChangedFiles"><li>Нет</li></ul>
+        </div>
+        <div class="env-block">
           <h3>Прогресс</h3>
           <p id="envProgress">Нет задачи</p>
         </div>
@@ -121,7 +126,6 @@
         <div class="env-actions">
           <button id="envCheckBtn" type="button">Проверить</button>
           <button id="envDiffBtn" type="button">Открыть Diff</button>
-          <button id="commitBtn" type="button" data-disabled disabled>Создать коммит</button>
         </div>
       </aside>
     </main>
@@ -148,6 +152,24 @@
         </div>
       </div>
     </section>
+
+    <dialog id="settingsDialog" class="settings-dialog">
+      <form id="settingsForm" method="dialog">
+        <header><h2>Настройки</h2><button id="closeSettingsBtn" type="button">×</button></header>
+        <label>Ollama base URL<input id="settingOllamaUrl" type="url" required /></label>
+        <label>Модель<input id="settingModel" type="text" required /></label>
+        <label>Режим по умолчанию
+          <select id="settingMode"><option value="plan">Только план</option><option value="review">С подтверждением</option><option value="dev">Полный доступ</option></select>
+        </label>
+        <label>Максимум fix-итераций<input id="settingFixIterations" type="number" min="0" max="10" /></label>
+        <label>App data<input id="settingAppData" type="text" readonly /></label>
+        <div class="settings-actions">
+          <button id="saveSettingsBtn" class="mini-button primary" type="submit">Сохранить</button>
+          <button id="clearCacheBtn" class="mini-button" type="button">Очистить cache</button>
+          <a class="mini-button" href="/api/logs/export">Экспорт логов</a>
+        </div>
+      </form>
+    </dialog>
 
     <script src="/static/app.js"></script>
   </body>

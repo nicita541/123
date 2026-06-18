@@ -39,6 +39,15 @@ class FakeOllamaProvider:
         }
 
 
+class SequentialOllamaProvider(FakeOllamaProvider):
+    def __init__(self, texts: list[str]) -> None:
+        super().__init__(texts[-1])
+        self.texts = iter(texts)
+
+    def complete(self, prompt: str) -> str:
+        return next(self.texts)
+
+
 class PatchGeneratorTests(unittest.TestCase):
     def test_calculator_skill_only_recognized_when_demo_fallback_enabled(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
@@ -136,6 +145,22 @@ class PatchGeneratorTests(unittest.TestCase):
             plan = generator.create_plan(task)
             with self.assertRaises(Exception):
                 generator.propose(task, root, plan=plan)
+
+    def test_context_mismatched_diff_is_retried_before_approval(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            (root / "sample.py").write_text("before\n", encoding="utf-8")
+            invalid = "--- a/sample.py\n+++ b/sample.py\n@@ -1 +1 @@\n-nope\n+after\n"
+            valid = "--- a/sample.py\n+++ b/sample.py\n@@ -1 +1 @@\n-before\n+after\n"
+            generator = PatchGenerator(
+                SafetyPolicy(root),
+                ollama_provider=SequentialOllamaProvider([invalid, valid]),  # type: ignore[arg-type]
+            )
+            task = Task.create("Update sample.py", mode=AgentMode.REVIEW, project_path=root)
+            plan = generator.create_plan(task)
+            proposal = generator.propose(task, root, plan=plan)
+            self.assertEqual(proposal.patch, valid)
+            self.assertEqual((root / "sample.py").read_text(encoding="utf-8"), "before\n")
 
 
 if __name__ == "__main__":

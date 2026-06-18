@@ -9,7 +9,7 @@ from complex_agent.tools.tool_result import ToolResult
 class FinalReportBuilder:
     def build(self, state: AgentState) -> str:
         lines = [
-            f"# Final Report",
+            "# Final Report",
             "",
             f"Task: {state.task.normalized_goal}",
             f"Mode: {state.task.mode.value}",

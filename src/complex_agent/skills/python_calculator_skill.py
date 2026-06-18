@@ -66,7 +66,7 @@ class PythonCalculatorSkill:
                 type="verification",
                 description="Запустить self-test без интерактивного ввода.",
                 required_tool="shell",
-                input={"command": "python calculator.py --self-test"},
+                input={"argv": ["python", "calculator.py", "--self-test"]},
                 risk_level=RiskLevel.MEDIUM,
             ),
             PlanStep.create(

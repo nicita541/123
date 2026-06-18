@@ -8,10 +8,10 @@ from complex_agent.tools.tool_result import ToolResult
 class GitBranchTool(ShellTool):
     name = "git_branch"
     description = "Run git branch --show-current."
-    required_keys = ()
+    required_keys: tuple[str, ...] = ()
 
     def run(self, data: dict[str, object], context: ToolContext) -> ToolResult:
-        result = super().run({"command": "git branch --show-current"}, context)
+        result = super().run({"argv": ["git", "branch", "--show-current"]}, context)
         if not result.success and "not a git repository" in result.content.lower():
             return ToolResult(True, "", summary="Not a git repository; skipped git branch.")
         return result

@@ -1,15 +1,16 @@
 const state = {
+  activeProjectId: null,
   currentProjectRoot: "",
   taskId: null,
-  sessionId: null,
-  status: "idle",
+  taskStatus: "idle",
   proposedDiff: "",
   proposedFiles: [],
   pendingApprovals: [],
-  report: "",
-  verificationOutput: "",
   workspace: null,
   busy: false,
+  continuing: false,
+  projects: [],
+  tasks: [],
 };
 
 const $ = (id) => document.getElementById(id);
@@ -27,7 +28,9 @@ async function api(path, options = {}) {
     ...options,
   });
   if (!response.ok) {
-    throw new Error(`${response.status}: ${await response.text()}`);
+    let detail = await response.text();
+    try { detail = JSON.parse(detail).detail || detail; } catch (_) { /* plain response */ }
+    throw new Error(String(detail));
   }
   return response.json();
 }
@@ -37,56 +40,39 @@ function toast(message, type = "error") {
   box.textContent = message;
   box.className = `toast ${type}`;
   box.hidden = false;
-  window.setTimeout(() => {
-    box.hidden = true;
-  }, 4200);
+  window.setTimeout(() => { box.hidden = true; }, 4200);
 }
 
 function setBusy(busy) {
   state.busy = busy;
   $("sendBtn").disabled = busy || !$("taskInput").value.trim();
-  document.querySelectorAll(".card-action, .mini-button, .env-actions button").forEach((button) => {
-    if (button.id === "selectProjectBtn" || button.id === "cancelProjectBtn") return;
+  document.querySelectorAll("button").forEach((button) => {
+    if (["closeSettingsBtn", "cancelProjectBtn"].includes(button.id)) return;
     if (button.hasAttribute("data-always-enabled")) return;
     button.disabled = busy || button.hasAttribute("data-disabled");
   });
 }
 
-function setStatus(status) {
-  state.status = status;
-  $("envProgress").textContent = translateStatus(status);
-}
-
 function translateStatus(status) {
   const map = {
-    idle: "Нет задачи",
-    planning: "План составляется",
-    planned: "План готов",
-    proposing_changes: "Предлагаются изменения",
-    waiting_approval: "Ожидается подтверждение",
-    approved: "Подтверждено",
-    running_to_goal: "Выполнение к цели",
-    applying_patch: "Применяется patch",
-    verifying: "Проверка",
-    completed: "Выполнено",
-    failed: "Ошибка",
-    rejected: "Отклонено",
-    pending_approval: "Ожидается подтверждение",
+    idle: "Нет задачи", draft: "Черновик", planning: "План составляется",
+    planned: "План готов", proposing: "Готовится Diff",
+    waiting_approval: "Ожидается подтверждение", approved: "Подтверждено",
+    applying: "Применяется patch", verifying: "Проверка", needs_fix: "Нужно исправление",
+    completed: "Выполнено", failed: "Ошибка", rejected: "Отклонено", archived: "Архив",
   };
   return map[status] || status;
+}
+
+function setStatus(status) {
+  state.taskStatus = status;
+  $("envProgress").textContent = translateStatus(status);
+  $("envTaskStatus").textContent = translateStatus(status);
 }
 
 function projectName(path) {
   const normalized = String(path || "").replaceAll("\\", "/").replace(/\/$/, "");
   return normalized.split("/").pop() || "проект";
-}
-
-function addHistory(title) {
-  const list = $("taskHistory");
-  if (list.textContent.includes("Задач пока нет")) list.innerHTML = "";
-  const item = document.createElement("li");
-  item.innerHTML = `<span>${escapeHtml(title)}</span><small>сейчас</small>`;
-  list.prepend(item);
 }
 
 function addFeedCard(className, html) {
@@ -95,24 +81,7 @@ function addFeedCard(className, html) {
   card.className = `feed-card ${className}`;
   card.innerHTML = html;
   $("feed").appendChild(card);
-  card.scrollIntoView({ behavior: "smooth", block: "end" });
   return card;
-}
-
-function resetChat() {
-  state.taskId = null;
-  state.sessionId = null;
-  state.status = "idle";
-  state.proposedDiff = "";
-  state.proposedFiles = [];
-  state.pendingApprovals = [];
-  state.report = "";
-  state.verificationOutput = "";
-  $("feed").innerHTML = "";
-  $("emptyState").hidden = false;
-  $("taskInput").value = "";
-  setStatus("idle");
-  setBusy(false);
 }
 
 function renderUserMessage(text) {
@@ -123,155 +92,168 @@ function renderSystemEvent(text) {
   addFeedCard("system-card", `<p>${escapeHtml(text)}</p>`);
 }
 
-function renderPlan(data) {
-  const steps = data.plan.steps
-    .map(
-      (step, index) => `
-        <li>
-          <span>${index + 1}</span>
-          <div>
-            <strong>${escapeHtml(step.description)}</strong>
-            <small>${escapeHtml(step.required_tool)} · ${escapeHtml(step.risk_level)} · ${escapeHtml(step.status)}</small>
-          </div>
-        </li>`
-    )
-    .join("");
-  const risks = (data.plan.risks || [])
-    .map((risk) => `<li>${escapeHtml(risk)}</li>`)
-    .join("");
-  addFeedCard(
-    "plan-card",
-    `
-      <div class="card-label">Агент</div>
-      <h3>План выполнения</h3>
-      <ol class="plan-list">${steps}</ol>
-      ${risks ? `<details><summary>Риски</summary><ul>${risks}</ul></details>` : ""}
-      <div class="approval-actions">
-        <button id="proposeBtn" class="card-action" type="button">Предложить изменения</button>
-        <button id="runGoalBtn" class="card-action secondary" type="button">Запустить цель</button>
-      </div>
-    `
-  );
-  $("proposeBtn").onclick = proposeChanges;
-  $("runGoalBtn").onclick = runGoal;
+function renderPlan(data, interactive = true) {
+  const steps = (data.plan?.steps || []).map((step, index) => `
+    <li><span>${index + 1}</span><div><strong>${escapeHtml(step.description)}</strong>
+    <small>${escapeHtml(step.required_tool)} · ${escapeHtml(step.risk_level)}</small></div></li>`).join("");
+  const actions = interactive && ["planned", "failed"].includes(data.status) ? `
+    <div class="approval-actions">
+      <button id="proposeBtn" class="card-action" type="button">Предложить изменения</button>
+    </div>` : "";
+  addFeedCard("plan-card", `<div class="card-label">Агент</div><h3>План выполнения</h3>
+    <ol class="plan-list">${steps}</ol>${actions}`);
+  if ($("proposeBtn")) $("proposeBtn").onclick = proposeChanges;
 }
 
 function renderDiffCard(data) {
   state.proposedDiff = data.proposed_diff || "";
   state.proposedFiles = data.proposed_files || [];
   const files = state.proposedFiles.map((file) => `<li>${escapeHtml(file)}</li>`).join("");
-  addFeedCard(
-    "diff-card",
-    `
-      <div class="card-label">Предложены изменения</div>
-      <h3>Diff готов к проверке</h3>
-      <p>${escapeHtml(data.proposed_summary || "Patch готов к проверке.")}</p>
-      <p class="muted">Изменено ${state.proposedFiles.length} файл(ов)</p>
-      <ul class="changed-files">${files}</ul>
-      <details>
-        <summary>Показать Diff</summary>
-        <pre class="diff-code">${escapeHtml(state.proposedDiff || "Изменений пока нет.")}</pre>
-      </details>
-    `
-  );
+  addFeedCard("diff-card", `<div class="card-label">Предложены изменения</div>
+    <h3>Diff готов к проверке</h3><p>${escapeHtml(data.proposed_summary || "")}</p>
+    <ul class="changed-files">${files}</ul><details><summary>Показать Diff</summary>
+    <pre class="diff-code">${escapeHtml(state.proposedDiff)}</pre></details>`);
+  renderChangedFiles(state.proposedFiles);
 }
 
 function renderApprovalCard(data) {
   state.pendingApprovals = data.pending_approvals || [];
   if (!state.pendingApprovals.length) return;
   const approval = state.pendingApprovals[0];
-  addFeedCard(
-    "approval-card",
-    `
-      <div class="card-label">Подтверждение</div>
-      <h3>Разрешить изменение файлов?</h3>
-      <p>${escapeHtml(approval.description)}</p>
-      <p class="muted">Цель: ${escapeHtml(approval.target || state.proposedFiles.join(", "))}</p>
-      <div class="approval-actions">
-        <button id="approveBtn" class="card-action" type="button">Подтвердить</button>
-        <button id="rejectBtn" class="card-action secondary" type="button">Отклонить</button>
-      </div>
-    `
-  );
+  addFeedCard("approval-card", `<div class="card-label">Подтверждение</div>
+    <h3>Разрешить изменение файлов?</h3><p>${escapeHtml(approval.description)}</p>
+    <p class="muted">Цель: ${escapeHtml(approval.target || "")}</p>
+    <div class="approval-actions"><button id="approveBtn" class="card-action">Подтвердить</button>
+    <button id="rejectBtn" class="card-action secondary">Отклонить</button></div>`);
   $("approveBtn").onclick = () => approve(approval);
   $("rejectBtn").onclick = () => reject(approval);
 }
 
-function renderRunResult(data) {
-  const files = (data.proposed_files || data.changed_files || [])
-    .map((file) => `<li>${escapeHtml(file)}</li>`)
-    .join("");
-  const verification = data.verification_output || "Проверка не запускалась.";
-  addFeedCard(
-    "result-card",
-    `
-      <div class="card-label">${data.status === "completed" ? "Готово" : "Ошибка"}</div>
-      <h3>${data.status === "completed" ? "Задача выполнена" : "Есть ошибка"}</h3>
-      <p>${data.status === "completed" ? "✓ Patch применён · ✓ Проверка прошла" : "Проверьте детали ниже"}</p>
-      <h4>Изменённые файлы</h4>
-      <ul class="changed-files">${files || "<li>Нет</li>"}</ul>
-      <details>
-        <summary>Логи команд</summary>
-        <pre>${escapeHtml(verification)}</pre>
-      </details>
-      <details open>
-        <summary>Финальный отчёт</summary>
-        <pre>${escapeHtml(data.final_report || "Отчёт пока не создан.")}</pre>
-      </details>
-    `
-  );
+function renderResult(data) {
+  const success = data.status === "completed";
+  const controls = `
+    <div class="approval-actions">
+      ${data.status === "needs_fix" ? '<button id="fixBtn" class="card-action">Предложить исправление</button>' : ""}
+      <button id="repeatBtn" class="card-action secondary">Повторить задачу</button>
+      <button id="continueBtn" class="card-action secondary">Продолжить</button>
+      ${data.rollback_available ? '<button id="rollbackBtn" class="card-action danger">Откатить</button>' : ""}
+    </div>`;
+  addFeedCard("result-card", `<div class="card-label">${success ? "Готово" : "Результат"}</div>
+    <h3>${escapeHtml(translateStatus(data.status))}</h3>
+    <details open><summary>Проверка</summary><pre>${escapeHtml(data.verification_output || "Нет вывода")}</pre></details>
+    <details><summary>Финальный отчёт</summary><pre>${escapeHtml(data.final_report || "Отчёт пока не создан")}</pre></details>
+    ${controls}`);
+  if ($("fixBtn")) $("fixBtn").onclick = proposeFix;
+  $("repeatBtn").onclick = repeatTask;
+  $("continueBtn").onclick = startContinuation;
+  if ($("rollbackBtn")) $("rollbackBtn").onclick = rollbackTask;
 }
 
-function renderFailure(data) {
-  const detail = (data.events || []).at(-1)?.detail || "Для этой задачи нужна локальная модель Ollama. Сейчас она недоступна.";
-  addFeedCard(
-    "system-card",
-    `
-      <div class="card-label">Не удалось продолжить</div>
-      <p>${escapeHtml(detail)}</p>
-    `
-  );
+function renderChangedFiles(files) {
+  $("envChangedFiles").innerHTML = files.length
+    ? files.map((file) => `<li>${escapeHtml(file)}</li>`).join("") : "<li>Нет</li>";
+}
+
+function resetFeed() {
+  $("feed").innerHTML = "";
+  $("emptyState").hidden = false;
+}
+
+function resetChat() {
+  state.taskId = null;
+  state.continuing = false;
+  state.proposedDiff = "";
+  state.proposedFiles = [];
+  resetFeed();
+  setStatus("idle");
+  renderChangedFiles([]);
+}
+
+async function loadProjects() {
+  const data = await api(`/api/projects?search=${encodeURIComponent($("projectSearch").value.trim())}`);
+  state.projects = data.projects || [];
+  const list = $("projectList");
+  list.innerHTML = state.projects.map((project) => `
+    <li><button class="project-list-item ${project.is_active ? "active" : ""}" data-project-id="${escapeHtml(project.id)}">
+      <strong>${escapeHtml(project.name)}</strong><small>${escapeHtml(project.last_task_title || project.root_path)}</small>
+    </button></li>`).join("");
+  list.querySelectorAll("[data-project-id]").forEach((button) => {
+    button.onclick = () => openProject(button.dataset.projectId);
+  });
+}
+
+async function loadTasks() {
+  if (!state.activeProjectId) return;
+  const data = await api(`/api/tasks?project_id=${encodeURIComponent(state.activeProjectId)}`);
+  const search = $("taskSearch").value.trim().toLowerCase();
+  state.tasks = (data.tasks || []).filter((task) => !search || task.title.toLowerCase().includes(search));
+  const groups = { "Сегодня": [], "Вчера": [], "Ранее": [] };
+  const now = new Date();
+  state.tasks.forEach((task) => {
+    const date = new Date(task.updated_at);
+    const days = Math.floor((new Date(now.toDateString()) - new Date(date.toDateString())) / 86400000);
+    groups[days === 0 ? "Сегодня" : days === 1 ? "Вчера" : "Ранее"].push(task);
+  });
+  $("taskHistory").innerHTML = Object.entries(groups).filter(([, tasks]) => tasks.length).map(([name, tasks]) => `
+    <section><h3>${name}</h3><ul>${tasks.map((task) => `<li><button data-task-id="${escapeHtml(task.id)}">
+    <span>${escapeHtml(task.title)}</span><small>${escapeHtml(translateStatus(task.status))}</small></button></li>`).join("")}</ul></section>`).join("") || "<p>Задач пока нет</p>";
+  $("taskHistory").querySelectorAll("[data-task-id]").forEach((button) => {
+    button.onclick = () => openTask(button.dataset.taskId);
+  });
+}
+
+async function openProject(projectId) {
+  setBusy(true);
+  try {
+    await api(`/api/projects/${projectId}/open`, { method: "POST" });
+    resetChat();
+    await loadStatus();
+    toast("Проект открыт", "success");
+  } catch (error) { handleError(error); } finally { setBusy(false); }
+}
+
+async function openTask(taskId) {
+  setBusy(true);
+  try {
+    const data = await api(`/api/tasks/${taskId}`);
+    state.taskId = taskId;
+    state.continuing = false;
+    resetFeed();
+    (data.messages || []).filter((message) => message.role === "user").forEach((message) => renderUserMessage(message.content));
+    renderPlan(data, false);
+    if (data.proposed_diff) renderDiffCard(data);
+    renderApprovalCard(data);
+    if (["completed", "failed", "needs_fix", "rejected"].includes(data.status)) renderResult(data);
+    setStatus(data.status);
+    renderChangedFiles(data.proposed_files || []);
+  } catch (error) { handleError(error); } finally { setBusy(false); }
 }
 
 async function loadStatus() {
   const [project, status, workspace] = await Promise.all([
-    api("/api/project"),
-    api("/api/status"),
-    api("/api/workspace"),
+    api("/api/project"), api("/api/status"), api("/api/workspace"),
   ]);
+  state.activeProjectId = project.id || status.project_id;
   state.currentProjectRoot = project.project_root;
   state.workspace = workspace;
+  $("projectName").textContent = project.name || projectName(project.project_root);
   $("projectPath").textContent = project.project_root;
   $("projectInput").value = project.project_root;
-  $("projectName").textContent = projectName(project.project_root);
   $("envProject").textContent = project.project_root;
   $("envBranch").textContent = workspace.git_branch || "нет ветки";
   $("envChanges").textContent = `${workspace.changed_files.length} файлов`;
-  $("envProvider").textContent = status.llm_provider === "ollama" ? "Ollama" : status.llm_provider || "deterministic";
-  $("envModel").textContent = status.ollama_model ? status.ollama_model : "deterministic fallback";
-  if (status.ollama_reachable && status.ollama_generation_check) {
-    $("envModelStatus").textContent = "Подключено";
-  } else if (status.ollama_reachable) {
-    $("envModelStatus").textContent = "Ollama отвечает · generation_check failed";
-  } else {
-    $("envModelStatus").textContent = "Ollama недоступен · deterministic fallback";
-  }
-  const models = status.ollama_models || [];
-  if (status.ollama_reachable && models.length) {
-    $("agentSelector").innerHTML = models
-      .map((model) => {
-        const selected = model === status.ollama_model ? " selected" : "";
-        return `<option${selected}>Ollama · ${escapeHtml(model)}</option>`;
-      })
-      .join("");
-  } else {
-    $("agentSelector").innerHTML = "<option>Локальный агент</option>";
-  }
-  $("envSources").innerHTML =
-    (workspace.files || [])
-      .slice(0, 4)
-      .map((file) => `<li>${escapeHtml(file.path)}</li>`)
-      .join("") || "<li>Источников пока нет</li>";
+  $("envProvider").textContent = "Ollama";
+  $("envModel").textContent = status.ollama_model;
+  $("envModelStatus").textContent = status.ollama_reachable
+    ? (status.ollama_generation_check ? "Подключено" : "Доступен, generation check не пройден")
+    : "Не проверен или недоступен";
+  const ollamaModels = status.ollama_models || [];
+  $("agentSelector").innerHTML = ollamaModels.length
+    ? ollamaModels.map((model) => `<option>${escapeHtml(model)}</option>`).join("")
+    : `<option>${escapeHtml(status.ollama_model)}</option>`;
+  $("envSources").innerHTML = (workspace.files || []).slice(0, 4)
+    .map((file) => `<li>${escapeHtml(file.path)}</li>`).join("") || "<li>Источников пока нет</li>";
+  await Promise.all([loadProjects(), loadTasks()]);
 }
 
 async function selectProject(event) {
@@ -280,19 +262,31 @@ async function selectProject(event) {
   if (!path) return;
   setBusy(true);
   try {
-    await api("/api/project/select", {
-      method: "POST",
-      body: JSON.stringify({ path }),
-    });
+    await api("/api/project/select", { method: "POST", body: JSON.stringify({ path }) });
     $("projectForm").hidden = true;
     resetChat();
     await loadStatus();
-    toast("Рабочая папка выбрана", "success");
-  } catch (error) {
-    handleError(error);
-  } finally {
-    setBusy(false);
-  }
+    toast("Рабочая папка добавлена", "success");
+  } catch (error) { handleError(error); } finally { setBusy(false); }
+}
+
+async function chooseFolder() {
+  try {
+    if (window.pywebview?.api?.choose_project) {
+      const path = await window.pywebview.api.choose_project();
+      if (path) { $("projectInput").value = path; $("projectForm").requestSubmit(); }
+      return;
+    }
+  } catch (_) { /* browser fallback below */ }
+  $("projectForm").hidden = false;
+  $("projectInput").focus();
+}
+
+async function archiveCurrentProject() {
+  if (!state.activeProjectId || !window.confirm("Архивировать текущий проект?")) return;
+  await api(`/api/projects/${state.activeProjectId}/archive`, { method: "POST" });
+  resetChat();
+  await loadStatus();
 }
 
 async function submitTask(taskOverride = "") {
@@ -300,155 +294,148 @@ async function submitTask(taskOverride = "") {
   if (!task) return;
   $("taskInput").value = "";
   setBusy(true);
-  setStatus("planning");
-  renderUserMessage(task);
-  addHistory(task);
   try {
-    const data = await api("/api/tasks/plan", {
-      method: "POST",
-      body: JSON.stringify({ task, mode: $("mode").value }),
-    });
-    state.taskId = data.task_id;
-    setStatus(data.status);
-    renderPlan(data);
-  } catch (error) {
-    handleError(error);
-  } finally {
-    setBusy(false);
-  }
+    let data;
+    if (state.continuing && state.taskId) {
+      data = await api(`/api/tasks/${state.taskId}/continue`, { method: "POST", body: JSON.stringify({ message: task }) });
+      state.continuing = false;
+    } else {
+      data = await api("/api/tasks/plan", { method: "POST", body: JSON.stringify({
+        task, mode: $("mode").value, project_id: state.activeProjectId,
+      }) });
+      state.taskId = data.task_id;
+    }
+    await openTask(data.task_id);
+    await loadTasks();
+  } catch (error) { handleError(error); } finally { setBusy(false); }
 }
 
 async function proposeChanges() {
   if (!state.taskId) return;
   setBusy(true);
-  setStatus("proposing_changes");
   try {
     const data = await api(`/api/tasks/${state.taskId}/propose`, { method: "POST" });
-    setStatus(data.status);
-    if (data.status === "failed") {
-      renderFailure(data);
-      return;
-    }
-    renderDiffCard(data);
-    renderApprovalCard(data);
-  } catch (error) {
-    handleError(error);
-  } finally {
-    setBusy(false);
-  }
+    await openTask(data.task_id);
+    await loadTasks();
+  } catch (error) { handleError(error); } finally { setBusy(false); }
 }
 
 async function runGoal() {
-  if (!state.taskId) {
-    await submitTask();
-    return;
-  }
-  if (state.status === "planned") {
-    await proposeChanges();
-    return;
-  }
-  if (state.status === "waiting_approval") {
-    renderSystemEvent("Нужно подтвердить предложенный Diff перед записью файлов.");
-    return;
-  }
-  await runTask();
+  if (!state.taskId) return submitTask();
+  if (state.taskStatus === "planned") return proposeChanges();
+  if (state.taskStatus === "waiting_approval") return renderSystemEvent("Сначала подтвердите Diff.");
+  return runTask();
 }
 
 async function approve(approval) {
-  if (!state.taskId) return;
   setBusy(true);
   try {
-    const data = await api(`/api/tasks/${state.taskId}/approve`, {
-      method: "POST",
-      body: JSON.stringify({ step_id: approval.step_id, action: approval.action }),
-    });
-    setStatus(data.status);
-    renderSystemEvent("Изменение подтверждено. Запускаю применение patch и проверку.");
+    await api(`/api/tasks/${state.taskId}/approve`, { method: "POST", body: JSON.stringify({
+      step_id: approval.step_id, action: approval.action,
+    }) });
     await runTask();
-  } catch (error) {
-    handleError(error);
-  } finally {
-    setBusy(false);
-  }
+  } catch (error) { handleError(error); } finally { setBusy(false); }
 }
 
 async function reject(approval) {
-  if (!state.taskId) return;
   setBusy(true);
   try {
-    const data = await api(`/api/tasks/${state.taskId}/reject`, {
-      method: "POST",
-      body: JSON.stringify({ step_id: approval.step_id, action: approval.action }),
-    });
-    setStatus(data.status);
-    renderSystemEvent("Изменение отклонено. Файлы не изменены.");
-  } catch (error) {
-    handleError(error);
-  } finally {
-    setBusy(false);
-  }
+    await api(`/api/tasks/${state.taskId}/reject`, { method: "POST", body: JSON.stringify({
+      step_id: approval.step_id, action: approval.action,
+    }) });
+    await openTask(state.taskId);
+    await loadTasks();
+  } catch (error) { handleError(error); } finally { setBusy(false); }
 }
 
 async function runTask() {
-  if (!state.taskId) return;
-  setStatus("running_to_goal");
-  try {
-    const data = await api(`/api/tasks/${state.taskId}/run`, { method: "POST" });
-    setStatus(data.status);
-    if (data.pending_approvals && data.pending_approvals.length) {
-      renderApprovalCard(data);
-      return;
-    }
-    renderRunResult(data);
-    await loadStatus();
-  } catch (error) {
-    handleError(error);
-  }
+  const data = await api(`/api/tasks/${state.taskId}/run`, { method: "POST" });
+  await openTask(data.task_id);
+  await Promise.all([loadTasks(), loadStatus()]);
+}
+
+async function proposeFix() {
+  const data = await api(`/api/tasks/${state.taskId}/propose-fix`, { method: "POST" });
+  await openTask(data.task_id);
+}
+
+async function repeatTask() {
+  const data = await api(`/api/tasks/${state.taskId}/repeat`, { method: "POST" });
+  state.taskId = data.task_id;
+  await openTask(data.task_id);
+  await loadTasks();
+}
+
+function startContinuation() {
+  state.continuing = true;
+  $("taskInput").placeholder = "Продолжите текущую задачу";
+  $("taskInput").focus();
+}
+
+async function rollbackTask() {
+  const confirmed = window.confirm("Откатить изменения? Созданные агентом файлы будут удалены.");
+  if (!confirmed) return;
+  const data = await api(`/api/tasks/${state.taskId}/rollback`, {
+    method: "POST", body: JSON.stringify({ confirm_created_deletions: true }),
+  });
+  await openTask(data.task_id);
+  await loadStatus();
 }
 
 function showCurrentDiff() {
-  if (state.proposedDiff) {
-    addFeedCard("diff-card", `<h3>Diff</h3><pre class="diff-code">${escapeHtml(state.proposedDiff)}</pre>`);
-  } else {
-    renderSystemEvent("Diff пока не создан.");
-  }
+  if (state.proposedDiff) addFeedCard("diff-card", `<h3>Diff</h3><pre class="diff-code">${escapeHtml(state.proposedDiff)}</pre>`);
+  else renderSystemEvent("Diff пока не создан.");
+}
+
+async function openSettings() {
+  const settings = await api("/api/settings");
+  $("settingOllamaUrl").value = settings.ollama_base_url;
+  $("settingModel").value = settings.selected_model;
+  $("settingMode").value = settings.default_access_mode;
+  $("settingFixIterations").value = settings.max_fix_iterations;
+  $("settingAppData").value = settings.app_data_path;
+  $("settingsDialog").showModal();
+}
+
+async function saveSettings(event) {
+  event.preventDefault();
+  await api("/api/settings", { method: "POST", body: JSON.stringify({
+    ollama_base_url: $("settingOllamaUrl").value.trim(), selected_model: $("settingModel").value.trim(),
+    default_access_mode: $("settingMode").value, max_fix_iterations: Number($("settingFixIterations").value),
+  }) });
+  $("settingsDialog").close();
+  await loadStatus();
+  toast("Настройки сохранены", "success");
 }
 
 function handleError(error) {
   const message = error instanceof Error ? error.message : String(error);
   toast(message);
-  setStatus("failed");
   renderSystemEvent(`Ошибка: ${message}`);
 }
 
 function setupEvents() {
-  $("taskInput").addEventListener("input", () => {
-    $("sendBtn").disabled = state.busy || !$("taskInput").value.trim();
-  });
+  $("taskInput").addEventListener("input", () => { $("sendBtn").disabled = state.busy || !$("taskInput").value.trim(); });
   $("taskInput").addEventListener("keydown", (event) => {
-    if (event.key === "Enter" && !event.shiftKey) {
-      event.preventDefault();
-      submitTask();
-    }
+    if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); submitTask(); }
   });
   $("sendBtn").onclick = () => submitTask();
   $("newChatBtn").onclick = resetChat;
   $("refreshBtn").onclick = () => loadStatus().catch(handleError);
-  $("envCheckBtn").onclick = () => submitTask("Проведи аудит проекта");
+  $("envCheckBtn").onclick = async () => { await api("/api/ollama/probe", { method: "POST" }); await loadStatus(); };
   $("envDiffBtn").onclick = showCurrentDiff;
-  $("commitBtn").onclick = () => renderSystemEvent("Создание commit отключено в MVP.");
-  $("chooseProjectBtn").onclick = () => {
-    $("projectForm").hidden = false;
-    $("projectInput").focus();
-  };
+  $("chooseProjectBtn").onclick = chooseFolder;
+  $("openFolderBtn").onclick = chooseFolder;
+  $("archiveProjectBtn").onclick = () => archiveCurrentProject().catch(handleError);
   $("projectForm").onsubmit = selectProject;
-  $("cancelProjectBtn").onclick = () => {
-    $("projectForm").hidden = true;
-  };
-  $("settingsBtn").onclick = () => renderSystemEvent("Настройки пока ограничены выбором рабочей папки и режима доступа.");
-  document.querySelectorAll(".quick-prompts button").forEach((button) => {
-    button.onclick = () => submitTask(button.textContent || "");
-  });
+  $("cancelProjectBtn").onclick = () => { $("projectForm").hidden = true; };
+  $("projectSearch").oninput = () => loadProjects().catch(handleError);
+  $("taskSearch").oninput = () => loadTasks().catch(handleError);
+  $("settingsBtn").onclick = () => openSettings().catch(handleError);
+  $("closeSettingsBtn").onclick = () => $("settingsDialog").close();
+  $("settingsForm").onsubmit = (event) => saveSettings(event).catch(handleError);
+  $("clearCacheBtn").onclick = async () => { await api("/api/maintenance/cache/clear", { method: "POST" }); toast("Cache очищен", "success"); };
+  document.querySelectorAll(".quick-prompts button").forEach((button) => { button.onclick = () => submitTask(button.textContent || ""); });
 }
 
 setupEvents();
